@@ -1,0 +1,48 @@
+name: Feature request
+description: Suggest a product or safety improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem should this solve?
+      placeholder: When I run multiple MCP servers...
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Suggested solution
+      description: What should MetalExplorer do?
+      placeholder: Add a view that...
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      placeholder: I tried Activity Monitor, lsof, ...
+    validations:
+      required: false
+  - type: dropdown
+    id: safety
+    attributes:
+      label: Does this affect safety, privacy, storage, AI, or termination?
+      options:
+        - "No"
+        - "Yes, it changes local data collection"
+        - "Yes, it changes storage"
+        - "Yes, it changes AI payloads or timing"
+        - "Yes, it changes termination behavior"
+        - "Unsure"
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Extra context
+      placeholder: Screenshots, examples, links, or notes.
+    validations:
+      required: false

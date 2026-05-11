@@ -1,0 +1,87 @@
+name: Bug report
+description: Report something broken in MetalExplorer
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. If the bug includes process commands, API keys, tokens, private paths, or security details, redact them before posting.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the visible behavior.
+      placeholder: The Network view shows...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+      placeholder: I expected...
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open MetalExplorer
+        2. Go to Network
+        3. Click ...
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: macOS 15.5
+    validations:
+      required: true
+  - type: input
+    id: chip
+    attributes:
+      label: Mac model or chip
+      placeholder: M3 Pro, M2 Air, Intel
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: MetalExplorer version or commit
+      placeholder: 0.1.0 or commit SHA
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Dashboard
+        - Processes
+        - Services
+        - Agents
+        - Cleanup
+        - Network
+        - Settings
+        - AI Explain
+        - Packaging or install
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshots or logs
+      description: Attach screenshots or logs if useful. Redact command arguments that contain secrets.
+      placeholder: Drag screenshots here.
+    validations:
+      required: false
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I have redacted API keys, tokens, private URLs, and secrets from commands or logs.
+          required: true

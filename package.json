@@ -1,0 +1,88 @@
+{
+  "name": "metalexplorer",
+  "productName": "MetalExplorer",
+  "version": "0.1.0",
+  "description": "A macOS-first agentic task manager with local process explainability.",
+  "author": "sethupavan12",
+  "license": "MIT",
+  "homepage": "https://github.com/sethupavan12/metalexplorer#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sethupavan12/metalexplorer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sethupavan12/metalexplorer/issues"
+  },
+  "keywords": [
+    "macos",
+    "task-manager",
+    "process-monitor",
+    "network-monitor",
+    "local-first",
+    "ai",
+    "agents",
+    "mcp",
+    "developer-tools",
+    "electron"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "type": "module",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "tsc --noEmit && electron-vite build",
+    "package:mac": "npm run build && electron-builder --mac dir --arm64",
+    "package:mac:x64": "npm run build && electron-builder --mac dir --x64",
+    "dist:mac": "npm run build && electron-builder --mac dmg zip --arm64 --x64",
+    "dist:mac:arm64": "npm run build && electron-builder --mac dmg zip --arm64",
+    "dist:mac:x64": "npm run build && electron-builder --mac dmg zip --x64",
+    "visual:smoke": "npm run build && electron scripts/visual-smoke.cjs",
+    "preview": "electron-vite preview",
+    "docs:check": "node scripts/check-docs.cjs",
+    "test": "vitest run",
+    "verify": "npm run docs:check && npm test && npm run build && npm run visual:smoke"
+  },
+  "dependencies": {
+    "@fontsource-variable/geist": "^5.2.8",
+    "lucide-react": "^0.475.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "@types/react": "^19.0.7",
+    "@types/react-dom": "^19.0.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^41.5.0",
+    "electron-builder": "^26.8.1",
+    "electron-vite": "^3.0.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.11",
+    "vitest": "^3.0.4"
+  },
+  "build": {
+    "appId": "dev.metalexplorer.desktop",
+    "productName": "MetalExplorer",
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
+      "target": [
+        "dir"
+      ]
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    }
+  }
+}
