@@ -58,7 +58,9 @@ Read the full safety and privacy notes:
 
 Public signed releases are not published yet.
 
-For now, build locally:
+You can download the DMG here -> [MetalExplorer (Apple Silicon)](https://github.com/sethupavan12/MetalExplorer/releases/tag/v0.1.0)
+
+If not, build locally:
 
 ```bash
 npm install
