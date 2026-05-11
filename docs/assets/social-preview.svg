@@ -1,0 +1,26 @@
+<svg width="1280" height="640" viewBox="0 0 1280 640" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1280" height="640" fill="#0b0d10"/>
+  <rect x="72" y="72" width="1136" height="496" rx="34" fill="#f4f5f7"/>
+  <rect x="72" y="72" width="280" height="496" rx="34" fill="#e5e7eb"/>
+  <rect x="114" y="118" width="74" height="74" rx="18" fill="#15171b"/>
+  <text x="139" y="167" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="42" font-weight="800" fill="#ffffff">M</text>
+  <text x="210" y="150" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="34" font-weight="750" fill="#111318">MetalExplorer</text>
+  <text x="210" y="184" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="23" font-weight="500" fill="#6b7280">Local Mac</text>
+  <rect x="112" y="248" width="198" height="54" rx="14" fill="#d1d5db"/>
+  <rect x="112" y="326" width="198" height="54" rx="14" fill="#eef0f3"/>
+  <rect x="112" y="404" width="198" height="54" rx="14" fill="#eef0f3"/>
+  <text x="420" y="178" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="68" font-weight="850" fill="#090a0c">Task manager for the agent era</text>
+  <text x="424" y="238" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="30" font-weight="520" fill="#5f6670">See local dev servers, AI agents, MCP tools, cleanup candidates, and internet-connected processes.</text>
+  <rect x="424" y="314" width="220" height="132" rx="22" fill="#ffffff" stroke="#d1d5db" stroke-width="2"/>
+  <rect x="674" y="314" width="220" height="132" rx="22" fill="#ffffff" stroke="#d1d5db" stroke-width="2"/>
+  <rect x="924" y="314" width="220" height="132" rx="22" fill="#ffffff" stroke="#d1d5db" stroke-width="2"/>
+  <text x="454" y="366" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="24" font-weight="700" fill="#6b7280">Agents</text>
+  <text x="454" y="420" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="52" font-weight="850" fill="#090a0c">38</text>
+  <text x="704" y="366" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="24" font-weight="700" fill="#6b7280">Internet</text>
+  <text x="704" y="420" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="52" font-weight="850" fill="#090a0c">8</text>
+  <text x="954" y="366" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="24" font-weight="700" fill="#6b7280">Cleanable</text>
+  <text x="954" y="420" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="52" font-weight="850" fill="#090a0c">1.2GB</text>
+  <rect x="424" y="488" width="720" height="22" rx="8" fill="#d1d5db"/>
+  <rect x="424" y="488" width="436" height="22" rx="8" fill="#33c864"/>
+  <text x="424" y="548" font-family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="28" font-weight="650" fill="#111318">Local-first. Optional AI. Guarded cleanup.</text>
+</svg>
