@@ -42,6 +42,7 @@ async function main() {
       await verifyFilterToggle(win, label);
       await verifyScroll(win, label);
       await verifyReadableText(win, label, theme.id);
+      await resetScrollForCapture(win);
       await new Promise((resolve) => setTimeout(resolve, 200));
       const image = await win.webContents.capturePage();
       const filename = theme.id === 'light' ? `visual-smoke-${label.toLowerCase()}.png` : `visual-smoke-${theme.id}-${label.toLowerCase()}.png`;
@@ -52,12 +53,24 @@ async function main() {
   app.quit();
 }
 
+async function resetScrollForCapture(win) {
+  await win.webContents.executeJavaScript(`
+    for (const selector of ['.dashboard', '.overview', '.settings-panel', '.table-scroll', '.inspector-scroll']) {
+      const element = document.querySelector(selector);
+      if (element) element.scrollTop = 0;
+    }
+  `);
+}
+
 async function verifyAppShell(win, label) {
   const shell = await win.webContents.executeJavaScript(`
     (() => {
       const bodyText = document.body.innerText || '';
+      const dashboardHeader = document.querySelector('.health-briefing, .command-center');
+      const dashboardHeaderRect = dashboardHeader?.getBoundingClientRect();
       return {
         mounted: Boolean(document.querySelector('.app-frame')),
+        dashboardHeaderHeight: dashboardHeaderRect ? Math.round(dashboardHeaderRect.height) : null,
         cssLeak:
           bodyText.includes('.process-cell') ||
           bodyText.includes('.network-remote') ||
@@ -68,6 +81,10 @@ async function verifyAppShell(win, label) {
 
   if (!shell.mounted || shell.cssLeak) {
     throw new Error(`App shell smoke failed for ${label}: ${JSON.stringify(shell)}`);
+  }
+
+  if (label === 'Dashboard' && (!shell.dashboardHeaderHeight || shell.dashboardHeaderHeight < 110)) {
+    throw new Error(`Dashboard header smoke failed for ${label}: ${JSON.stringify(shell)}`);
   }
 }
 
