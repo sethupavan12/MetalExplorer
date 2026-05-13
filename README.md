@@ -8,7 +8,7 @@
 ![Local first](https://img.shields.io/badge/privacy-local%20first-2ea043)
 
 <p align="center">
-  <img src="docs/assets/metalexplorer-dashboard.png" alt="MetalExplorer dashboard showing system health, review findings, network activity, cleanup candidates, and the system inspector" width="960">
+  <img src="docs/assets/metalexplorer-dashboard-v0.2.0.png" alt="MetalExplorer dashboard showing system health, review findings, network activity, cleanup candidates, and the system inspector" width="960">
 </p>
 
 MetalExplorer is for people who run local AI tools, MCP servers, dev servers, package scripts, databases, browser helpers, and background agents, then lose track of what is still alive.
