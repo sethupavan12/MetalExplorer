@@ -8,7 +8,7 @@
 ![Local first](https://img.shields.io/badge/privacy-local%20first-2ea043)
 
 <p align="center">
-  <img src="docs/assets/metalexplorer-dashboard.png" alt="MetalExplorer dashboard showing processes, network activity, cleanup candidates, and the process inspector" width="960">
+  <img src="docs/assets/metalexplorer-dashboard.png" alt="MetalExplorer dashboard showing system health, review findings, network activity, cleanup candidates, and the system inspector" width="960">
 </p>
 
 MetalExplorer is for people who run local AI tools, MCP servers, dev servers, package scripts, databases, browser helpers, and background agents, then lose track of what is still alive.
@@ -56,9 +56,9 @@ Read the full safety and privacy notes:
 
 ## Install
 
-Public signed releases are not published yet.
+Apple Silicon release builds are published on GitHub. They are ad-hoc signed and not notarized yet, so macOS may show an unidentified developer warning.
 
-You can download the DMG here -> [MetalExplorer (Apple Silicon)](https://github.com/sethupavan12/MetalExplorer/releases/tag/v0.1.0)
+You can download the DMG here -> [MetalExplorer (Apple Silicon)](https://github.com/sethupavan12/MetalExplorer/releases/tag/v0.2.0)
 
 If not, build locally:
 
