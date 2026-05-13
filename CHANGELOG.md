@@ -6,6 +6,22 @@ This project follows a simple pre-1.0 changelog. Dates use `YYYY-MM-DD`.
 
 ## Unreleased
 
+## 0.2.0 - 2026-05-14
+
+### Added
+
+- Redesigned Dashboard around a system health briefing, clickable scopes, and focused review modules.
+- Added a system-level inspector for Dashboard with top findings and privacy context.
+- Added safer two-step confirmation for cleanup and network termination actions.
+
+### Changed
+
+- Reworked process, service, cleanup, network, and settings screens for a cleaner macOS-style layout.
+- Made table rows denser, reduced decorative styling, and improved inspector grouping.
+- Updated visual smoke checks to catch collapsed dashboard and scroll regressions.
+
+## 0.1.0 - 2026-05-11
+
 ### Added
 
 - macOS Electron app shell with Dashboard, Processes, Services, Agents, Cleanup, Network, and Settings views.

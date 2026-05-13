@@ -11,6 +11,7 @@ When using AI coding agents in this repo:
 - Keep OS access in `src/main`.
 - Keep renderer code behind `src/preload/index.ts`.
 - Run `npm test`, `npm run build`, and `npm run visual:smoke` before claiming UI or safety-sensitive work is complete.
+- After meaningful app or UI changes, build the app and show the user the latest running app or verified screenshots before wrapping up.
 
 Important files:
 

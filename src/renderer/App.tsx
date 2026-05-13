@@ -25,7 +25,7 @@ import {
   Sparkles,
   X
 } from 'lucide-react';
-import { FormEvent, MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, MouseEvent as ReactMouseEvent, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type { JSX, ReactNode } from 'react';
 import type { AiExplanation, AppSettings, ProcessCategory, ProcessInfo, ProcessSnapshot, ThemeName } from '../shared/types';
 
@@ -57,7 +57,7 @@ const CATEGORY_LABELS: Record<ProcessCategory, string> = {
   database: 'Database',
   browser: 'Browser',
   'user-app': 'App',
-  unknown: 'Unknown'
+  unknown: 'Unknown process'
 };
 
 const THEME_LABELS: Record<ThemeName, string> = {
@@ -95,6 +95,7 @@ export function App(): JSX.Element {
   const [aiExplanation, setAiExplanation] = useState<AiExplanation | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [confirmPid, setConfirmPid] = useState<number | null>(null);
+  const [confirmCleanup, setConfirmCleanup] = useState(false);
   const [cleanupSelection, setCleanupSelection] = useState<Set<number>>(new Set());
   const [connectivityHistory, setConnectivityHistory] = useState<number[]>(Array.from({ length: 72 }, () => 0));
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readStoredBoolean('metalexplorer.sidebarCollapsed', false));
@@ -102,24 +103,37 @@ export function App(): JSX.Element {
   const [filters, setFilters] = useState<ProcessFilters>(DEFAULT_FILTERS);
   const [sidebarWidth, setSidebarWidth] = useState(() => clamp(readStoredNumber('metalexplorer.sidebarWidth', 232), 190, 320));
   const [inspectorWidth, setInspectorWidth] = useState(() => clamp(readStoredNumber('metalexplorer.inspectorWidth', 356), 300, 620));
+  const refreshInFlight = useRef<Promise<void> | null>(null);
+  const deferredQuery = useDeferredValue(query);
 
   const refresh = useCallback(async () => {
-    try {
-      const nextSnapshot = await window.metalExplorer.listProcesses();
-      setSnapshot(nextSnapshot);
-      setSelectedPid((currentPid) => {
-        if (currentPid && nextSnapshot.processes.some((process) => process.pid === currentPid)) {
-          return currentPid;
-        }
-
-        return pickFocusProcess(nextSnapshot.processes)?.pid ?? nextSnapshot.processes[0]?.pid ?? null;
-      });
-      setNotice('');
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Unable to read process state.');
-    } finally {
-      setLoading(false);
+    if (refreshInFlight.current) {
+      return refreshInFlight.current;
     }
+
+    const run = (async () => {
+      try {
+        const nextSnapshot = await window.metalExplorer.listProcesses();
+        const availablePids = new Set(nextSnapshot.processes.map((process) => process.pid));
+        setSnapshot(nextSnapshot);
+        setSelectedPid((currentPid) => {
+          if (currentPid && availablePids.has(currentPid)) {
+            return currentPid;
+          }
+
+          return pickFocusProcess(nextSnapshot.processes)?.pid ?? nextSnapshot.processes[0]?.pid ?? null;
+        });
+        setNotice('');
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : 'Unable to read process state.');
+      } finally {
+        setLoading(false);
+        refreshInFlight.current = null;
+      }
+    })();
+
+    refreshInFlight.current = run;
+    return run;
   }, []);
 
   useEffect(() => {
@@ -159,18 +173,15 @@ export function App(): JSX.Element {
   }, [filtersVisible]);
 
   const processes = snapshot?.processes ?? [];
-  const cleanCandidates = processes.filter((process) => process.cleanCandidate);
-  const localServices = processes.filter((process) => process.ports.length > 0);
-  const agents = processes.filter((process) => process.category === 'ai-agent');
-  const networkProcesses = processes.filter((process) => process.networkConnections.length > 0);
-  const highLoad = [...processes].sort((a, b) => b.cpuPercent - a.cpuPercent).slice(0, 6);
-  const selectedProcess = processes.find((process) => process.pid === selectedPid) ?? pickFocusProcess(processes);
+  const buckets = useMemo(() => buildProcessBuckets(processes), [processes]);
+  const { cleanCandidates, localServices, agents, networkProcesses, highLoad, processByPid, searchIndex } = buckets;
+  const selectedProcess = (selectedPid ? processByPid.get(selectedPid) : null) ?? pickFocusProcess(processes);
   const tableView = view !== 'dashboard' && view !== 'settings';
   const activeFilterCount = countActiveFilters(filters);
 
   const filteredProcesses = useMemo(() => {
     const base = getBaseProcessesForView(view, processes);
-    const normalizedQuery = query.trim().toLowerCase();
+    const normalizedQuery = deferredQuery.trim().toLowerCase();
     const filtered = base.filter((process) => {
       if (!matchesProcessFilters(process, filters)) {
         return false;
@@ -180,30 +191,32 @@ export function App(): JSX.Element {
         return true;
       }
 
-      return [
-        process.name,
-        process.command,
-        process.description,
-        process.user,
-        String(process.pid),
-        portsText(process),
-        connectionsText(process),
-        formatBps(process.network.downloadBps, process.network.status),
-        formatBps(process.network.uploadBps, process.network.status)
-      ]
-        .join(' ')
-        .toLowerCase()
-        .includes(normalizedQuery);
+      return (searchIndex.get(process.pid) ?? '').includes(normalizedQuery);
     });
 
     return filtered.sort((a, b) => compareProcesses(a, b, sortKey, sortDirection));
-  }, [filters, processes, query, sortDirection, sortKey, view]);
+  }, [deferredQuery, filters, processes, searchIndex, sortDirection, sortKey, view]);
+
+  useEffect(() => {
+    if (!tableView || !filteredProcesses.length) {
+      return;
+    }
+
+    if (!selectedPid || !filteredProcesses.some((process) => process.pid === selectedPid)) {
+      setSelectedPid(filteredProcesses[0].pid);
+      setAiExplanation(null);
+    }
+  }, [filteredProcesses, selectedPid, tableView]);
 
   function changeView(nextView: ViewId): void {
     setView(nextView);
     setQuery('');
     setAiExplanation(null);
+    setConfirmCleanup(false);
 
+    if (nextView === 'processes') {
+      setSelectedPid(processes[0]?.pid ?? selectedPid);
+    }
     if (nextView === 'services') {
       setSelectedPid(localServices[0]?.pid ?? selectedPid);
     }
@@ -292,6 +305,14 @@ export function App(): JSX.Element {
     const pids = [...cleanupSelection];
     if (!pids.length) {
       setCleanupSelection(new Set(cleanCandidates.map((process) => process.pid)));
+      setNotice('Selected recommended cleanup candidates. Review the list before stopping anything.');
+      return;
+    }
+
+    if (!confirmCleanup) {
+      setConfirmCleanup(true);
+      setNotice(`Review ${pids.length} selected cleanup candidate${pids.length === 1 ? '' : 's'} before stopping. Click Confirm stop selected to proceed.`);
+      window.setTimeout(() => setConfirmCleanup(false), 5000);
       return;
     }
 
@@ -299,6 +320,7 @@ export function App(): JSX.Element {
     const stopped = results.filter((result) => result.ok).length;
     setNotice(`Stopped ${stopped} of ${pids.length} selected cleanup candidates.`);
     setCleanupSelection(new Set());
+    setConfirmCleanup(false);
     await refresh();
   }
 
@@ -425,9 +447,9 @@ export function App(): JSX.Element {
             cleanCandidates={cleanCandidates}
             networkProcesses={networkProcesses}
             connectivityHistory={connectivityHistory}
-            onSelect={(pid) => {
+            onSelect={(pid, targetView = 'processes') => {
               setSelectedPid(pid);
-              setView('processes');
+              setView(targetView);
             }}
             onNavigate={changeView}
           />
@@ -444,6 +466,7 @@ export function App(): JSX.Element {
             sortDirection={sortDirection}
             cleanupSelection={cleanupSelection}
             confirmPid={confirmPid}
+            confirmCleanup={confirmCleanup}
             onSort={handleSort}
             onSelect={(pid) => {
               setSelectedPid(pid);
@@ -457,11 +480,12 @@ export function App(): JSX.Element {
                 } else {
                   next.add(pid);
                 }
+                setConfirmCleanup(false);
                 return next;
               });
             }}
             onTerminateSelection={() => void terminateCleanupSelection()}
-            onKillSelectedNetwork={() => void terminateSelected()}
+            onReviewSelectedNetwork={() => void terminateSelected()}
             onOpenService={(process) => void openSelectedService(process)}
           />
         ) : null}
@@ -472,6 +496,16 @@ export function App(): JSX.Element {
       <aside className="inspector">
         {view === 'settings' ? (
           <PrivacyPanel settings={settings} />
+        ) : view === 'dashboard' ? (
+          <SystemInspector
+            snapshot={snapshot}
+            processes={processes}
+            highLoad={highLoad}
+            localServices={localServices}
+            cleanCandidates={cleanCandidates}
+            networkProcesses={networkProcesses}
+            onNavigate={changeView}
+          />
         ) : (
           <Inspector
             process={selectedProcess}
@@ -506,90 +540,239 @@ function Dashboard({
   cleanCandidates: ProcessInfo[];
   networkProcesses: ProcessInfo[];
   connectivityHistory: number[];
-  onSelect: (pid: number) => void;
+  onSelect: (pid: number, targetView?: ViewId) => void;
   onNavigate: (view: ViewId) => void;
 }): JSX.Element {
   const status = getSystemStatus(snapshot, processes);
+  const topReview = buildReviewQueue(processes, highLoad, localServices, cleanCandidates, networkProcesses).slice(0, 4);
 
   return (
     <div className="dashboard scroll-area">
-      <section className={`status-panel ${status.tone}`}>
-        <div>
-          <span className="section-kicker">General Status</span>
+      <section className={`health-briefing ${status.tone}`}>
+        <div className="health-status">
+          <span className="section-kicker">System Health</span>
           <h2>{status.label}</h2>
           <p>{status.description}</p>
         </div>
-        <StatusBadge tone={status.tone} label={status.badge} />
+
+        <div className="health-findings">
+          <FindingRow
+            tone={(snapshot?.summary.unknownNetworkListeners ?? 0) ? 'warning' : 'good'}
+            label={(snapshot?.summary.unknownNetworkListeners ?? 0) ? 'Unknown listener needs review' : 'No unknown listeners'}
+            detail={(snapshot?.summary.unknownNetworkListeners ?? 0) ? `${snapshot?.summary.unknownNetworkListeners ?? 0} local listener${(snapshot?.summary.unknownNetworkListeners ?? 0) === 1 ? '' : 's'}` : 'Local ports look classified'}
+            onClick={() => onNavigate('services')}
+          />
+          <FindingRow
+            tone={(snapshot?.summary.internetProcesses ?? 0) ? 'warning' : 'good'}
+            label={(snapshot?.summary.internetProcesses ?? 0) ? 'Internet activity is live' : 'No internet processes'}
+            detail={`${snapshot?.summary.internetProcesses ?? 0} process${(snapshot?.summary.internetProcesses ?? 0) === 1 ? '' : 'es'} · ${formatBps(snapshot?.summary.networkDownloadBps ?? null, snapshot ? 'available' : 'measuring')} down`}
+            onClick={() => onNavigate('network')}
+          />
+          <FindingRow
+            tone={(snapshot?.summary.cleanCandidates ?? 0) ? 'warning' : 'good'}
+            label={(snapshot?.summary.cleanCandidates ?? 0) ? 'Cleanup can be reviewed' : 'No cleanup queue'}
+            detail={`${snapshot?.summary.cleanCandidates ?? 0} candidate${(snapshot?.summary.cleanCandidates ?? 0) === 1 ? '' : 's'} · ${snapshot?.summary.cleanableMemoryMb ?? 0} MB`}
+            onClick={() => onNavigate('cleanup')}
+          />
+        </div>
+
+        <div className="health-sample">
+          <span>Last sample</span>
+          <strong>{snapshot ? formatSampleTime(snapshot.generatedAt) : 'Measuring'}</strong>
+          <small>{snapshot?.summary.cpuTotal ?? 0}% CPU · {snapshot?.summary.externalConnections ?? 0} internet connections</small>
+        </div>
       </section>
 
-      <section className="metric-grid">
-        <MetricButton
-          label="Processes"
+      <section className="scope-strip" aria-label="Primary scopes">
+        <ScopeButton
+          label="All Processes"
           value={snapshot?.summary.totalProcesses ?? 0}
-          detail={`${snapshot?.summary.userProcesses ?? 0} yours`}
+          detail={`${snapshot?.summary.userProcesses ?? 0} user-owned`}
           icon={Monitor}
           onClick={() => onNavigate('processes')}
         />
-        <MetricButton
-          label="Local services"
-          value={snapshot?.summary.localServers ?? 0}
-          detail={`${snapshot?.summary.listeningPorts ?? 0} ports`}
+        <ScopeButton
+          label="Local Services"
+          value={snapshot?.summary.listeningPorts ?? 0}
+          detail={`${snapshot?.summary.localServers ?? 0} processes`}
           icon={Server}
           onClick={() => onNavigate('services')}
         />
-        <MetricButton
-          label="Agents"
-          value={snapshot?.summary.aiAgents ?? 0}
-          detail={`${snapshot?.summary.cleanCandidates ?? 0} cleanup`}
-          icon={Bot}
-          onClick={() => onNavigate('agents')}
-        />
-        <MetricButton
+        <ScopeButton
           label="Internet"
           value={snapshot?.summary.internetProcesses ?? 0}
           detail={`${snapshot?.summary.externalConnections ?? 0} connections`}
           icon={Network}
           onClick={() => onNavigate('network')}
         />
+        <ScopeButton
+          label="Cleanup"
+          value={snapshot?.summary.cleanCandidates ?? 0}
+          detail={`${snapshot?.summary.cleanableMemoryMb ?? 0} MB reviewable`}
+          icon={ListChecks}
+          onClick={() => onNavigate('cleanup')}
+        />
       </section>
 
-      <section className="connectivity-card">
-        <div className="panel-heading">
-          <h3>Connectivity History</h3>
-          <span>{formatBps(snapshot?.summary.networkDownloadBps ?? null, snapshot ? 'available' : 'measuring')} down</span>
-        </div>
-        <ConnectivityHistory values={connectivityHistory} />
-      </section>
+      <SignalStrip snapshot={snapshot} />
 
-      <section className="overview-grid">
-        <ListPanel title="High Load" rows={highLoad} value={(process) => `${process.cpuPercent}%`} onSelect={onSelect} />
-        <ListPanel title="Internet Processes" rows={networkProcesses.slice(0, 6)} value={connectionsText} onSelect={onSelect} />
-        <div className="panel">
-          <div className="panel-heading">
-            <h3>Cleanup</h3>
-            <button type="button" onClick={() => onNavigate('cleanup')}>
-              Open
-            </button>
-          </div>
-          {cleanCandidates.length ? (
-            cleanCandidates.slice(0, 6).map((process) => (
-              <button className="list-row" type="button" key={process.pid} onClick={() => onSelect(process.pid)}>
+      <section className="dashboard-grid">
+        <DashboardModule title="Needs Review" action="Processes" onAction={() => onNavigate('processes')}>
+          {topReview.length ? (
+            topReview.map((process) => (
+              <button className="review-row" type="button" key={`review-${process.pid}`} onClick={() => onSelect(process.pid)}>
                 <StatusDot risk={process.riskLevel} />
-                <span>{process.name}</span>
-                <strong>{process.category === 'local-server' ? portsText(process) : `${process.cpuPercent}%`}</strong>
+                <div>
+                  <strong>{process.name}</strong>
+                  <span>{reviewReason(process)}</span>
+                </div>
+                <small>{process.category === 'unknown' ? 'Unknown' : CATEGORY_LABELS[process.category]}</small>
               </button>
             ))
           ) : (
-            <Empty label="No cleanup candidates" />
+            <Empty label="No processes need review" />
           )}
-        </div>
+        </DashboardModule>
+
+        <DashboardModule title="Internet Activity" action="Network" onAction={() => onNavigate('network')}>
+          {networkProcesses.slice(0, 5).map((process) => (
+              <button className="review-row" type="button" key={`net-${process.pid}`} onClick={() => onSelect(process.pid, 'network')}>
+              <StatusDot risk={process.riskLevel} />
+              <div>
+                <strong>{process.name}</strong>
+                <span>{remoteDestinationsText(process) || connectionsText(process)}</span>
+              </div>
+              <small>{formatBps(process.network.downloadBps, process.network.status)}</small>
+            </button>
+          ))}
+          {!networkProcesses.length ? <Empty label="No internet-connected processes" /> : null}
+        </DashboardModule>
+
+        <DashboardModule title="Exposed Local Services" action="Services" onAction={() => onNavigate('services')}>
+          {localServices.slice(0, 5).map((process) => (
+              <button className="review-row" type="button" key={`svc-${process.pid}`} onClick={() => onSelect(process.pid, 'services')}>
+              <StatusDot risk={process.riskLevel} />
+              <div>
+                <strong>{localUrlText(process) || process.name}</strong>
+                <span>{process.name} · {bindScopeText(process)}</span>
+              </div>
+              <small>{portsText(process)}</small>
+            </button>
+          ))}
+          {!localServices.length ? <Empty label="No listening local services" /> : null}
+        </DashboardModule>
       </section>
 
-      <section className="overview-grid compact">
-        <ListPanel title="Listening Services" rows={localServices.slice(0, 6)} value={portsText} onSelect={onSelect} />
-        <StatusPanel title="Cleanable memory" value={`${snapshot?.summary.cleanableMemoryMb ?? 0} MB`} detail={`${snapshot?.summary.cleanableCpuPercent ?? 0}% CPU`} />
-        <StatusPanel title="Unknown network" value={snapshot?.summary.unknownNetworkListeners ?? 0} detail="local listeners" />
+      <section className="dashboard-grid secondary">
+        <DashboardModule title="Cleanup Queue" action="Review" onAction={() => onNavigate('cleanup')}>
+          {cleanCandidates.slice(0, 5).map((process) => (
+              <button className="review-row" type="button" key={`clean-${process.pid}`} onClick={() => onSelect(process.pid, 'cleanup')}>
+              <StatusDot risk={process.riskLevel} />
+              <div>
+                <strong>{process.name}</strong>
+                <span>{cleanupReason(process)}</span>
+              </div>
+              <small>{Math.round(process.rssKb / 1024)} MB</small>
+            </button>
+          ))}
+          {!cleanCandidates.length ? <Empty label="No cleanup candidates" /> : null}
+        </DashboardModule>
+
+        <section className="connectivity-card activity-module">
+          <div>
+            <div className="panel-heading">
+              <h3>Recent Network Sample</h3>
+              <span>{formatBps(snapshot?.summary.networkDownloadBps ?? null, snapshot ? 'available' : 'measuring')} down</span>
+            </div>
+            <ConnectivityHistory values={connectivityHistory} />
+          </div>
+        </section>
+
+        <DashboardModule title="High Load" action="Processes" onAction={() => onNavigate('processes')}>
+          {highLoad.slice(0, 5).map((process) => (
+            <button className="review-row" type="button" key={`load-${process.pid}`} onClick={() => onSelect(process.pid)}>
+              <StatusDot risk={process.riskLevel} />
+              <div>
+                <strong>{process.name}</strong>
+                <span>{process.description}</span>
+              </div>
+              <small>{process.cpuPercent}%</small>
+            </button>
+          ))}
+          {!highLoad.length ? <Empty label="No high load processes" /> : null}
+        </DashboardModule>
       </section>
+    </div>
+  );
+}
+
+function FindingRow({ tone, label, detail, onClick }: { tone: 'good' | 'warning' | 'critical'; label: string; detail: string; onClick: () => void }): JSX.Element {
+  return (
+    <button className={`finding-row ${tone}`} type="button" onClick={onClick}>
+      <StatusDot risk={tone === 'good' ? 'low' : tone === 'critical' ? 'high' : 'medium'} />
+      <span>{label}</span>
+      <strong>{detail}</strong>
+    </button>
+  );
+}
+
+function ScopeButton({
+  label,
+  value,
+  detail,
+  icon: Icon,
+  onClick
+}: {
+  label: string;
+  value: string | number;
+  detail: string;
+  icon: typeof Activity;
+  onClick: () => void;
+}): JSX.Element {
+  return (
+    <button className="scope-button" type="button" onClick={onClick}>
+      <Icon size={16} />
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{detail}</small>
+    </button>
+  );
+}
+
+function DashboardModule({ title, action, onAction, children }: { title: string; action: string; onAction: () => void; children: ReactNode }): JSX.Element {
+  return (
+    <section className="dashboard-module">
+      <div className="panel-heading">
+        <h3>{title}</h3>
+        <button type="button" onClick={onAction}>
+          {action}
+        </button>
+      </div>
+      <div className="module-list">{children}</div>
+    </section>
+  );
+}
+
+function SignalStrip({ snapshot }: { snapshot: ProcessSnapshot | null }): JSX.Element {
+  const summary = snapshot?.summary;
+  const networkAvailable = Boolean(summary && (summary.networkDownloadBps !== null || summary.networkUploadBps !== null));
+  const networkBps = networkAvailable ? (summary?.networkDownloadBps ?? 0) + (summary?.networkUploadBps ?? 0) : null;
+
+  return (
+    <section className="signal-strip" aria-label="System signals">
+      <SignalItem label="CPU total" value={`${summary?.cpuTotal ?? 0}%`} tone={(summary?.cpuTotal ?? 0) >= 75 ? 'critical' : (summary?.cpuTotal ?? 0) >= 35 ? 'warning' : 'good'} />
+      <SignalItem label="Memory seen" value={`${summary?.memoryTotalMb ?? 0} MB`} tone="neutral" />
+      <SignalItem label="Cleanable" value={`${summary?.cleanableMemoryMb ?? 0} MB`} tone={(summary?.cleanCandidates ?? 0) ? 'warning' : 'good'} />
+      <SignalItem label="Network" value={formatBps(networkBps, summary ? (networkAvailable ? 'available' : 'unavailable') : 'measuring')} tone={networkBps ? 'warning' : 'neutral'} />
+    </section>
+  );
+}
+
+function SignalItem({ label, value, tone }: { label: string; value: string; tone: 'good' | 'warning' | 'critical' | 'neutral' }): JSX.Element {
+  return (
+    <div className={`signal-item ${tone}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
     </div>
   );
 }
@@ -760,11 +943,12 @@ function ProcessTable({
   sortDirection,
   cleanupSelection,
   confirmPid,
+  confirmCleanup,
   onSort,
   onSelect,
   onToggleCleanup,
   onTerminateSelection,
-  onKillSelectedNetwork,
+  onReviewSelectedNetwork,
   onOpenService
 }: {
   view: ViewId;
@@ -774,11 +958,12 @@ function ProcessTable({
   sortDirection: 'asc' | 'desc';
   cleanupSelection: Set<number>;
   confirmPid: number | null;
+  confirmCleanup: boolean;
   onSort: (key: SortKey) => void;
   onSelect: (pid: number) => void;
   onToggleCleanup: (pid: number) => void;
   onTerminateSelection: () => void;
-  onKillSelectedNetwork: () => void;
+  onReviewSelectedNetwork: () => void;
   onOpenService: (process: ProcessInfo) => void;
 }): JSX.Element {
   const isCleanup = view === 'cleanup';
@@ -795,17 +980,17 @@ function ProcessTable({
           <span>
             {isCleanup
               ? cleanupSelection.size
-                ? `${cleanupSelection.size} selected`
-                : `${processes.length} candidates`
-              : `${processes.length} internet-connected processes`}
+                ? `${cleanupSelection.size} selected · nothing stops until confirmation`
+                : `${processes.length} candidates · review before stopping`
+              : `${processes.length} internet-connected processes · inspect before stopping`}
           </span>
           {isCleanup ? (
             <button type="button" onClick={onTerminateSelection}>
-              {cleanupSelection.size ? 'Terminate selected' : 'Select all'}
+              {cleanupSelection.size ? (confirmCleanup ? 'Confirm stop selected' : 'Review cleanup') : 'Select recommended'}
             </button>
           ) : (
-            <button className="danger-button actionbar-danger" type="button" onClick={onKillSelectedNetwork} disabled={!selectedProcess?.safeToTerminate}>
-              {confirmPid === selectedPid ? 'Confirm kill' : 'Kill selected'}
+            <button className="danger-button actionbar-danger" type="button" onClick={onReviewSelectedNetwork} disabled={!selectedProcess?.safeToTerminate}>
+              {confirmPid === selectedPid ? 'Confirm stop' : 'Review termination'}
             </button>
           )}
         </div>
@@ -831,6 +1016,10 @@ function ProcessTable({
               <SortableHeader label="Kind" sortKey="category" active={sortKey} direction={sortDirection} onSort={onSort} />
               {isNetwork ? (
                 <th>Remote</th>
+              ) : isCleanup ? (
+                <th className="summary-column">Reason</th>
+              ) : isServices ? (
+                <th className="summary-column">Local URL</th>
               ) : (
                 <th className="summary-column">Summary</th>
               )}
@@ -883,7 +1072,15 @@ function ProcessTable({
                   <CategoryBadge category={process.category} />
                 </td>
                 {isNetwork ? (
-                  <td className="network-remote">{networkServicesText(process)}</td>
+                  <td className="network-remote">{remoteDestinationsText(process) || networkServicesText(process)}</td>
+                ) : isCleanup ? (
+                  <td className="summary-column">
+                    <span className="description">{cleanupReason(process)}</span>
+                  </td>
+                ) : isServices ? (
+                  <td className="summary-column">
+                    <span className="description">{localUrlText(process) || process.description}</span>
+                  </td>
                 ) : (
                   <td className="summary-column">
                     <span className="description">{process.description}</span>
@@ -996,41 +1193,37 @@ function Inspector({
         <StatusDot risk={process.riskLevel} />
         <div>
           <h2>{process.name}</h2>
-          <p>PID {process.pid}</p>
+          <p>PID {process.pid} · {process.user}</p>
         </div>
       </div>
 
-      <div className="safety-card">
-        <span>{process.safeToTerminate ? 'Guarded termination available' : 'Protected from termination'}</span>
-        <strong>{process.cleanCandidate ? 'Cleanup candidate' : CATEGORY_LABELS[process.category]}</strong>
-      </div>
+      <InspectorGroup title="Assessment">
+        <StatusLine label="Classification" value={process.cleanCandidate ? 'Likely safe to stop' : CATEGORY_LABELS[process.category]} />
+        <StatusLine label="Confidence" value={confidenceLabel(process)} />
+        <StatusLine label="Termination guard" value={process.safeToTerminate ? 'Review required' : 'Protected'} />
+        <StatusLine label="Why flagged" value={reviewReason(process)} />
+      </InspectorGroup>
 
-      <div className="button-row">
+      <div className="action-stack">
         <button className="primary-button" type="button" onClick={onExplain} disabled={aiLoading}>
           <Sparkles size={15} />
-          {aiLoading ? 'Explaining' : 'AI Explain'}
+          {aiLoading ? 'Explaining' : 'Explain on demand'}
         </button>
-        <button className="danger-button" type="button" onClick={onTerminate} disabled={!process.safeToTerminate}>
-          {confirmPid === process.pid ? <CircleStop size={15} /> : <Power size={15} />}
-          {confirmPid === process.pid ? 'Confirm' : 'Terminate'}
-        </button>
+        {process.ports.length ? (
+          <button className="open-service-button" type="button" onClick={() => onOpenService(process)}>
+            <ExternalLink size={15} />
+            Open {localUrlText(process)}
+          </button>
+        ) : null}
       </div>
 
-      {process.ports.length ? (
-        <button className="open-service-button" type="button" onClick={() => onOpenService(process)}>
-          <ExternalLink size={15} />
-          Open localhost:{process.ports[0].port}
-        </button>
-      ) : null}
-
-      <div className="stat-grid">
-        <Stat label="CPU" value={`${process.cpuPercent}%`} icon={Cpu} />
-        <Stat label="Memory" value={`${Math.round(process.rssKb / 1024)} MB`} icon={HardDrive} />
-        <Stat label="Down" value={formatBps(process.network.downloadBps, process.network.status)} icon={Network} />
-        <Stat label="Up" value={formatBps(process.network.uploadBps, process.network.status)} icon={Activity} />
-        <Stat label="Impact" value={`${process.impactScore}/100`} icon={Activity} />
-        <Stat label="Uptime" value={formatDuration(process.uptimeSeconds)} icon={Shield} />
-      </div>
+      <InspectorGroup title="Resource Use">
+        <StatusLine label="CPU" value={`${process.cpuPercent}%`} />
+        <StatusLine label="Memory" value={`${Math.round(process.rssKb / 1024)} MB`} />
+        <StatusLine label="Download" value={formatBps(process.network.downloadBps, process.network.status)} />
+        <StatusLine label="Upload" value={formatBps(process.network.uploadBps, process.network.status)} />
+        <StatusLine label="Uptime" value={formatDuration(process.uptimeSeconds)} />
+      </InspectorGroup>
 
       <InspectorSection title="Description">
         <p>{process.description}</p>
@@ -1051,7 +1244,7 @@ function Inspector({
             <div className="chip-row">
               {process.networkConnections.slice(0, 8).map((connection) => (
                 <span className="chip" key={`${connection.localPort}-${connection.remoteAddress}-${connection.remotePort}`}>
-                  {networkServiceLabel(connection.remotePort)}
+                  {remoteConnectionLabel(connection)}
                 </span>
               ))}
             </div>
@@ -1099,8 +1292,81 @@ function Inspector({
         </InspectorSection>
       ) : null}
 
+      <InspectorSection title="Termination">
+        <p>{process.safeToTerminate ? 'MetalExplorer will ask for confirmation before stopping this user-owned process.' : 'This process is protected from termination in MetalExplorer.'}</p>
+        <button className="danger-button termination-button" type="button" onClick={onTerminate} disabled={!process.safeToTerminate}>
+          {confirmPid === process.pid ? <CircleStop size={15} /> : <Power size={15} />}
+          {confirmPid === process.pid ? 'Confirm stop' : 'Review termination'}
+        </button>
+      </InspectorSection>
+
       <InspectorSection title="Command">
         <code>{process.command}</code>
+      </InspectorSection>
+    </div>
+  );
+}
+
+function SystemInspector({
+  snapshot,
+  processes,
+  highLoad,
+  localServices,
+  cleanCandidates,
+  networkProcesses,
+  onNavigate
+}: {
+  snapshot: ProcessSnapshot | null;
+  processes: ProcessInfo[];
+  highLoad: ProcessInfo[];
+  localServices: ProcessInfo[];
+  cleanCandidates: ProcessInfo[];
+  networkProcesses: ProcessInfo[];
+  onNavigate: (view: ViewId) => void;
+}): JSX.Element {
+  const status = getSystemStatus(snapshot, processes);
+  const reviewQueue = buildReviewQueue(processes, highLoad, localServices, cleanCandidates, networkProcesses);
+
+  return (
+    <div className="inspector-scroll">
+      <div className="inspector-header">
+        <Shield size={18} />
+        <div>
+          <h2>System Review</h2>
+          <p>{snapshot ? formatSampleTime(snapshot.generatedAt) : 'Measuring'}</p>
+        </div>
+      </div>
+
+      <InspectorGroup title="Status">
+        <StatusLine label="Health" value={status.label} />
+        <StatusLine label="Review items" value={String(reviewQueue.length)} />
+        <StatusLine label="Internet" value={`${snapshot?.summary.internetProcesses ?? 0} processes`} />
+        <StatusLine label="Cleanup queue" value={`${snapshot?.summary.cleanCandidates ?? 0} candidates`} />
+      </InspectorGroup>
+
+      <InspectorSection title="Top Findings">
+        <div className="inspector-action-list">
+          <button type="button" onClick={() => onNavigate('services')}>
+            <span>Unknown listeners</span>
+            <strong>{snapshot?.summary.unknownNetworkListeners ?? 0}</strong>
+          </button>
+          <button type="button" onClick={() => onNavigate('network')}>
+            <span>Internet processes</span>
+            <strong>{snapshot?.summary.internetProcesses ?? 0}</strong>
+          </button>
+          <button type="button" onClick={() => onNavigate('cleanup')}>
+            <span>Cleanup candidates</span>
+            <strong>{snapshot?.summary.cleanCandidates ?? 0}</strong>
+          </button>
+        </div>
+      </InspectorSection>
+
+      <InspectorSection title="Privacy">
+        <p>Process data stays local unless you explicitly use Explain on demand for a selected process.</p>
+        <div className="chip-row">
+          <span className="chip">Local first</span>
+          <span className="chip">On-demand AI</span>
+        </div>
       </InspectorSection>
     </div>
   );
@@ -1113,6 +1379,15 @@ function Stat({ label, value, icon: Icon }: { label: string; value: string; icon
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
+  );
+}
+
+function InspectorGroup({ title, children }: { title: string; children: ReactNode }): JSX.Element {
+  return (
+    <section className="inspector-group">
+      <h3>{title}</h3>
+      <div className="inspector-rows">{children}</div>
+    </section>
   );
 }
 
@@ -1168,48 +1443,59 @@ function SettingsPanel({ settings, onSaved }: { settings: AppSettings | null; on
 
   return (
     <form className="settings-panel scroll-area" onSubmit={(event) => void handleSubmit(event)}>
-      <section className="form-card">
-        <h2>Theme</h2>
-        <div className="theme-options" role="radiogroup" aria-label="Theme">
-          {(Object.keys(THEME_LABELS) as ThemeName[]).map((themeName) => (
-            <button
-              className={theme === themeName ? 'theme-option active' : 'theme-option'}
-              type="button"
-              key={themeName}
-              onClick={() => setTheme(themeName)}
-            >
-              <span>{THEME_LABELS[themeName]}</span>
-            </button>
-          ))}
+      <section className="settings-section">
+        <h2>Appearance</h2>
+        <div className="settings-row">
+          <div>
+            <strong>Theme</strong>
+            <span>Choose the local app appearance.</span>
+          </div>
+          <div className="theme-options" role="radiogroup" aria-label="Theme">
+            {(Object.keys(THEME_LABELS) as ThemeName[]).map((themeName) => (
+              <button
+                className={theme === themeName ? 'theme-option active' : 'theme-option'}
+                type="button"
+                key={themeName}
+                onClick={() => setTheme(themeName)}
+              >
+                <span>{THEME_LABELS[themeName]}</span>
+              </button>
+            ))}
+          </div>
         </div>
       </section>
 
-      <section className="form-card">
+      <section className="settings-section">
         <h2>AI Provider</h2>
-        <label>
+        <p className="settings-note">AI explanations are on demand. Process data is sent only when you click Explain for a selected process.</p>
+        <label className="settings-row">
           <span>Base URL</span>
           <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
         </label>
-        <label>
+        <label className="settings-row">
           <span>Model</span>
           <input value={model} onChange={(event) => setModel(event.target.value)} />
         </label>
-        <label>
+        <label className="settings-row">
           <span>API Key</span>
-          <input value={apiKey} type="password" placeholder={settings?.hasApiKey ? 'Saved locally' : 'sk-...'} onChange={(event) => setApiKey(event.target.value)} />
+          <input value={apiKey} type="password" placeholder={settings?.hasApiKey ? 'Saved locally' : 'Paste key for this Mac'} onChange={(event) => setApiKey(event.target.value)} />
+        </label>
+        <label className="settings-row toggle-setting">
+          <span>Remember key locally</span>
+          <input checked={rememberApiKey} type="checkbox" onChange={(event) => setRememberApiKey(event.target.checked)} />
         </label>
       </section>
 
-      <section className="form-card">
+      <section className="settings-section">
         <h2>Local App</h2>
-        <label>
+        <label className="settings-row">
           <span>Refresh interval</span>
           <input value={refreshMs} type="number" min={1000} max={30000} step={500} onChange={(event) => setRefreshMs(Number(event.target.value))} />
         </label>
-        <label className="toggle-row">
-          <input checked={rememberApiKey} type="checkbox" onChange={(event) => setRememberApiKey(event.target.checked)} />
-          <span>Remember API key locally</span>
-        </label>
+        <div className="settings-row readonly-row">
+          <span>Storage</span>
+          <strong>{settings?.encryptionAvailable ? 'Encrypted local storage available' : 'Encrypted storage unavailable'}</strong>
+        </div>
       </section>
 
       <div className="settings-actions">
@@ -1298,6 +1584,64 @@ function buildNavigation(snapshot: ProcessSnapshot | null): Array<{ id: ViewId; 
   ];
 }
 
+function buildProcessBuckets(processes: ProcessInfo[]): {
+  cleanCandidates: ProcessInfo[];
+  localServices: ProcessInfo[];
+  agents: ProcessInfo[];
+  networkProcesses: ProcessInfo[];
+  highLoad: ProcessInfo[];
+  processByPid: Map<number, ProcessInfo>;
+  searchIndex: Map<number, string>;
+} {
+  const cleanCandidates: ProcessInfo[] = [];
+  const localServices: ProcessInfo[] = [];
+  const agents: ProcessInfo[] = [];
+  const networkProcesses: ProcessInfo[] = [];
+  const processByPid = new Map<number, ProcessInfo>();
+  const searchIndex = new Map<number, string>();
+
+  for (const process of processes) {
+    processByPid.set(process.pid, process);
+    searchIndex.set(process.pid, buildProcessSearchText(process));
+
+    if (process.cleanCandidate) {
+      cleanCandidates.push(process);
+    }
+
+    if (process.ports.length) {
+      localServices.push(process);
+    }
+
+    if (process.category === 'ai-agent') {
+      agents.push(process);
+    }
+
+    if (process.networkConnections.length) {
+      networkProcesses.push(process);
+    }
+  }
+
+  const highLoad = [...processes].sort((a, b) => b.cpuPercent - a.cpuPercent).slice(0, 6);
+
+  return { cleanCandidates, localServices, agents, networkProcesses, highLoad, processByPid, searchIndex };
+}
+
+function buildProcessSearchText(process: ProcessInfo): string {
+  return [
+    process.name,
+    process.command,
+    process.description,
+    process.user,
+    String(process.pid),
+    portsText(process),
+    connectionsText(process),
+    formatBps(process.network.downloadBps, process.network.status),
+    formatBps(process.network.uploadBps, process.network.status)
+  ]
+    .join(' ')
+    .toLowerCase();
+}
+
 function getBaseProcessesForView(view: ViewId, processes: ProcessInfo[]): ProcessInfo[] {
   if (view === 'services') {
     return processes.filter((process) => process.ports.length > 0);
@@ -1320,6 +1664,29 @@ function getBaseProcessesForView(view: ViewId, processes: ProcessInfo[]): Proces
 
 function pickFocusProcess(processes: ProcessInfo[]): ProcessInfo | null {
   return [...processes].sort((a, b) => processPriority(b) - processPriority(a))[0] ?? null;
+}
+
+function buildReviewQueue(
+  processes: ProcessInfo[],
+  highLoad: ProcessInfo[],
+  localServices: ProcessInfo[],
+  cleanCandidates: ProcessInfo[],
+  networkProcesses: ProcessInfo[]
+): ProcessInfo[] {
+  const reviewMap = new Map<number, ProcessInfo>();
+  const add = (process: ProcessInfo): void => {
+    if (processPriority(process) > 20 || process.cleanCandidate || process.networkConnections.length || process.ports.length) {
+      reviewMap.set(process.pid, process);
+    }
+  };
+
+  processes.filter((process) => process.category === 'unknown').forEach(add);
+  networkProcesses.forEach(add);
+  localServices.forEach(add);
+  cleanCandidates.forEach(add);
+  highLoad.forEach(add);
+
+  return [...reviewMap.values()].sort((a, b) => processPriority(b) - processPriority(a));
 }
 
 function processPriority(process: ProcessInfo): number {
@@ -1414,6 +1781,19 @@ function networkServicesText(process: ProcessInfo): string {
   return services.length > 2 ? `${services.slice(0, 2).join(', ')} +${services.length - 2}` : services.join(', ');
 }
 
+function remoteDestinationsText(process: ProcessInfo): string {
+  if (!process.networkConnections.length) {
+    return '';
+  }
+
+  const destinations = [...new Set(process.networkConnections.map(remoteConnectionLabel))];
+  return destinations.length > 2 ? `${destinations.slice(0, 2).join(', ')} +${destinations.length - 2}` : destinations.join(', ');
+}
+
+function remoteConnectionLabel(connection: ProcessInfo['networkConnections'][number]): string {
+  return `${connection.remoteAddress}:${connection.remotePort}`;
+}
+
 function networkServiceLabel(port: number): string {
   if (port === 443) {
     return 'HTTPS';
@@ -1432,6 +1812,84 @@ function networkServiceLabel(port: number): string {
   }
 
   return `TCP ${port}`;
+}
+
+function localUrlText(process: ProcessInfo): string {
+  const firstPort = process.ports[0];
+  if (!firstPort) {
+    return '';
+  }
+
+  const host = firstPort.address === '*' || firstPort.address === '0.0.0.0' ? 'localhost' : firstPort.address === '::1' ? '[::1]' : firstPort.address;
+  return `${host}:${firstPort.port}`;
+}
+
+function bindScopeText(process: ProcessInfo): string {
+  if (!process.ports.length) {
+    return 'No local ports';
+  }
+
+  if (process.ports.some((port) => port.address === '*' || port.address === '0.0.0.0')) {
+    return 'Network-visible listener';
+  }
+
+  return 'Local-only listener';
+}
+
+function cleanupReason(process: ProcessInfo): string {
+  if (process.category === 'local-server' && process.ports.length) {
+    return `Development service with ${portsText(process)} open`;
+  }
+
+  if (process.category === 'ai-agent') {
+    return `Agent helper owned by ${process.user}`;
+  }
+
+  if (process.networkConnections.length) {
+    return `${connectionsText(process)} active`;
+  }
+
+  return process.safeToTerminate ? 'User-owned process with guarded stop available' : 'Protected process';
+}
+
+function reviewReason(process: ProcessInfo): string {
+  if (process.category === 'unknown' && process.networkConnections.length) {
+    return `Unknown process contacting ${remoteDestinationsText(process)}`;
+  }
+
+  if (process.category === 'unknown' && process.ports.length) {
+    return `Unknown listener on ${portsText(process)}`;
+  }
+
+  if (process.cleanCandidate) {
+    return cleanupReason(process);
+  }
+
+  if (process.networkConnections.length) {
+    return connectionsText(process);
+  }
+
+  if (process.ports.length) {
+    return `${bindScopeText(process)} on ${portsText(process)}`;
+  }
+
+  if (process.cpuPercent >= 10) {
+    return `${process.cpuPercent}% CPU`;
+  }
+
+  return process.description;
+}
+
+function confidenceLabel(process: ProcessInfo): string {
+  if (process.category === 'unknown') {
+    return 'Low';
+  }
+
+  if (process.riskLevel === 'medium' || process.riskLevel === 'unknown') {
+    return 'Medium';
+  }
+
+  return 'High';
 }
 
 function getSystemStatus(snapshot: ProcessSnapshot | null, processes: ProcessInfo[]): { tone: 'good' | 'warning' | 'critical'; label: string; description: string; badge: string } {
@@ -1455,8 +1913,8 @@ function getSystemStatus(snapshot: ProcessSnapshot | null, processes: ProcessInf
   if (unknownInternet > 0 || snapshot.summary.unknownNetworkListeners > 0 || highLoad > 0 || cleanupCpu >= 12) {
     return {
       tone: 'warning',
-      label: 'Worth looking at',
-      description: 'There is at least one process, listener, or cleanup candidate worth reviewing.',
+      label: 'Review needed',
+      description: 'A process, listener, or cleanup candidate is worth checking before it keeps running.',
       badge: 'Review'
     };
   }
@@ -1524,6 +1982,15 @@ function formatDuration(seconds: number): string {
   }
 
   return `${Math.floor(hours / 24)}d`;
+}
+
+function formatSampleTime(value: string): string {
+  const time = new Date(value);
+  if (Number.isNaN(time.getTime())) {
+    return 'Just now';
+  }
+
+  return time.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
 }
 
 function clamp(value: number, min: number, max: number): number {
