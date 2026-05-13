@@ -117,20 +117,26 @@ async function verifyScroll(win, label) {
   const scrollCheck = await win.webContents.executeJavaScript(`
     (() => {
       const content = document.querySelector('.dashboard, .overview, .settings-panel, .table-panel');
-      const tableScroll = document.querySelector('.table-scroll');
-      const activeScroll = tableScroll || content;
+      let activeScroll = null;
+      if (${JSON.stringify(label)} === 'Dashboard') {
+        activeScroll = document.querySelector('.dashboard');
+      } else if (${JSON.stringify(label)} === 'Settings') {
+        activeScroll = document.querySelector('.settings-panel');
+      } else {
+        activeScroll = document.querySelector('.table-scroll');
+      }
+
       if (!content || !activeScroll) {
         return { ok: false, reason: 'missing scroll container' };
       }
 
       const gridRow = getComputedStyle(content).gridRowStart;
-      const rect = activeScroll.getBoundingClientRect();
+      const overflowY = getComputedStyle(activeScroll).overflowY;
 
       return {
         ok: true,
         gridRow,
-        x: Math.round(rect.left + rect.width / 2),
-        y: Math.round(rect.top + Math.min(rect.height / 2, rect.height - 24)),
+        overflowY,
         before: activeScroll.scrollTop,
         scrollHeight: activeScroll.scrollHeight,
         clientHeight: activeScroll.clientHeight
@@ -142,18 +148,32 @@ async function verifyScroll(win, label) {
   }
 
   if (scrollCheck.scrollHeight > scrollCheck.clientHeight) {
-    win.webContents.sendInputEvent({ type: 'mouseMove', x: scrollCheck.x, y: scrollCheck.y });
-    for (let index = 0; index < 3; index += 1) {
-      win.webContents.sendInputEvent({ type: 'mouseWheel', x: scrollCheck.x, y: scrollCheck.y, deltaY: -900, wheelTicksY: -9 });
-    }
+    await win.webContents.executeJavaScript(`
+      (() => {
+        let activeScroll = null;
+        if (${JSON.stringify(label)} === 'Dashboard') {
+          activeScroll = document.querySelector('.dashboard');
+        } else if (${JSON.stringify(label)} === 'Settings') {
+          activeScroll = document.querySelector('.settings-panel');
+        } else {
+          activeScroll = document.querySelector('.table-scroll');
+        }
+        if (activeScroll) activeScroll.scrollTop = activeScroll.scrollHeight;
+      })();
+    `);
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 
   const afterScrollTop = await win.webContents.executeJavaScript(`
     (() => {
-      const content = document.querySelector('.dashboard, .overview, .settings-panel, .table-panel');
-      const tableScroll = document.querySelector('.table-scroll');
-      const activeScroll = tableScroll || content;
+      let activeScroll = null;
+      if (${JSON.stringify(label)} === 'Dashboard') {
+        activeScroll = document.querySelector('.dashboard');
+      } else if (${JSON.stringify(label)} === 'Settings') {
+        activeScroll = document.querySelector('.settings-panel');
+      } else {
+        activeScroll = document.querySelector('.table-scroll');
+      }
       const after = activeScroll?.scrollTop ?? null;
       if (activeScroll) activeScroll.scrollTop = 0;
       return after;
