@@ -408,6 +408,28 @@ body.is-resizing .resize-handle {
   -webkit-app-region: no-drag;
 }
 
+.sample-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0 9px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.sample-status.live {
+  color: var(--green);
+}
+
+.sample-status.stale {
+  color: var(--amber);
+}
+
 .search-field {
   display: flex;
   align-items: center;
@@ -1514,6 +1536,22 @@ tbody tr.selected {
   font-size: 0.78rem;
 }
 
+.kind-stack {
+  display: grid;
+  justify-items: start;
+  gap: 3px;
+  min-width: 0;
+}
+
+.kind-stack > span {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .description {
   display: block;
   overflow: hidden;
@@ -1762,6 +1800,92 @@ tbody tr.selected {
   line-height: 1.42;
 }
 
+.evidence-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 17px;
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.38;
+}
+
+.evidence-list li {
+  overflow-wrap: anywhere;
+}
+
+.rule-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.rule-actions button {
+  min-height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
+.rule-actions button:hover {
+  background: var(--row-hover);
+}
+
+.rule-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.full-width-button {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.connection-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.connection-row {
+  display: grid;
+  grid-template-columns: minmax(58px, auto) minmax(0, 1fr);
+  gap: 2px 8px;
+  min-height: 38px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.connection-row span {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.connection-row strong {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 0.8rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-row small {
+  grid-column: 2;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .termination-button {
   width: 100%;
   margin-top: 10px;
@@ -1866,6 +1990,210 @@ tbody tr.selected {
 
 .category-badge.macos-system {
   color: var(--muted);
+}
+
+.review-overlay {
+  position: fixed;
+  z-index: 50;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(8px);
+}
+
+.review-sheet {
+  display: grid;
+  gap: 14px;
+  width: min(520px, calc(100vw - 48px));
+  max-height: calc(100vh - 72px);
+  overflow: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  padding: 18px;
+  background: var(--surface-raised);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+}
+
+.cleanup-review-sheet {
+  width: min(640px, calc(100vw - 48px));
+}
+
+.review-sheet-header {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.review-sheet-header svg {
+  color: var(--muted);
+}
+
+.review-sheet-header h2,
+.review-sheet-header p {
+  margin: 0;
+}
+
+.review-sheet-header h2 {
+  color: var(--text-strong);
+  font-size: 1.02rem;
+  font-weight: 720;
+}
+
+.review-sheet-header p {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.cleanup-summary.compact {
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.review-process-list {
+  display: grid;
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--border);
+}
+
+.review-process-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 7px 10px;
+  background: var(--surface);
+}
+
+.review-process-row div {
+  min-width: 0;
+}
+
+.review-process-row strong,
+.review-process-row span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-process-row strong {
+  color: var(--text-strong);
+  font-size: 0.84rem;
+}
+
+.review-process-row span,
+.review-process-row small {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.command-overlay {
+  align-items: start;
+  padding-top: 82px;
+}
+
+.command-palette {
+  display: grid;
+  gap: 8px;
+  width: min(620px, calc(100vw - 48px));
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+}
+
+.command-input {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  min-height: 46px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.command-input svg {
+  color: var(--muted);
+}
+
+.command-input input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-strong);
+}
+
+.command-list {
+  display: grid;
+  gap: 1px;
+  max-height: 420px;
+  overflow: auto;
+  padding: 6px;
+}
+
+.command-list button {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 38px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0 9px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.command-list button:hover {
+  background: var(--row-hover);
+}
+
+.command-list button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.command-list svg,
+.command-list small {
+  color: var(--muted);
+}
+
+.command-list span {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 0.84rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-list small {
+  overflow: hidden;
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status-badge.neutral {

@@ -13,8 +13,8 @@ This document is the safety contract.
 - No kernel extension.
 - No admin privileges.
 - No automatic AI calls.
-- No process history saved.
-- No network history saved.
+- No full process snapshots saved.
+- No remote-destination history saved.
 - Termination is guarded and uses `SIGTERM`.
 
 ## What MetalExplorer reads
@@ -38,6 +38,7 @@ It reads:
 - listening TCP ports
 - established internet TCP connections
 - network byte samples when `nettop` provides them
+- local classification evidence and launch/provenance signals derived from the same process data
 
 ## What MetalExplorer does not do
 
@@ -70,12 +71,26 @@ Saved:
 
 Not saved:
 
-- process history
 - process command history
-- network history
+- full process snapshots
+- remote network destination history
 - AI responses
 - search history
 - termination history
+
+Renderer-local preferences are stored in browser local storage for the current macOS user.
+
+Saved locally:
+
+- pane widths
+- collapsed sidebar preference
+- filter visibility preference
+- user process rules such as "always keep" and "always flag"
+- resource trend samples capped to 24 hours
+
+Resource trend samples are intentionally minimal. They store process name, category, a local trend key, timestamp, CPU, memory, and aggregate upload/download byte rates. They do not store full command strings, command arguments, remote hosts, remote ports, AI responses, or termination history.
+
+The Settings screen includes a control to clear local trends and user rules.
 
 ## API keys
 
@@ -101,6 +116,9 @@ The payload can include:
 - ports
 - local category
 - local description
+- classification confidence and evidence
+- local launch/provenance metadata
+- local service/project grouping
 - command path and arguments, with common secret-looking values redacted
 - local safe-termination flag
 
@@ -130,7 +148,7 @@ For sensitive machines:
 
 The Network view lists processes with established internet TCP connections.
 
-The UI intentionally summarizes remote services instead of showing raw remote addresses in primary rows. The goal is to help users understand activity without flooding the UI with low-level endpoint data.
+The UI shows remote address, remote port, service label, direction, remote scope, and likely encryption status for active connections. MetalExplorer does not packet-sniff traffic or persist remote destination history.
 
 Network speed is estimated from `nettop` byte samples. macOS may return incomplete data, so the UI can show:
 
@@ -155,6 +173,14 @@ Before terminating, the app refreshes process state and checks:
 - local classifier marks it as safe to terminate
 
 The UI also requires confirmation for selected-process termination.
+
+## Classification reports
+
+The inspector can export a classification report for a selected process when the user explicitly clicks export.
+
+The report is a local JSON file written to the path the user chooses in the macOS save dialog. It includes the selected process classification, evidence, provenance, ports, resource use, and summarized active network connections. Command arguments are redacted with the same redaction path used before AI explanations.
+
+Classification reports are not uploaded by MetalExplorer.
 
 ## What "safe to terminate" means
 

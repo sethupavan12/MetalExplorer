@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type {
   AiExplanation,
   AppSettings,
+  DiagnosticsExportResult,
   MetalExplorerApi,
   ProcessInfo,
   ProcessSnapshot,
@@ -15,7 +16,8 @@ const api: MetalExplorerApi = {
   openExternal: (url: string) => ipcRenderer.invoke('external:open', url) as Promise<void>,
   getSettings: () => ipcRenderer.invoke('settings:get') as Promise<AppSettings>,
   updateSettings: (update: SettingsUpdate) => ipcRenderer.invoke('settings:update', update) as Promise<AppSettings>,
-  explainProcess: (process: ProcessInfo) => ipcRenderer.invoke('ai:explain', process) as Promise<AiExplanation>
+  explainProcess: (process: ProcessInfo) => ipcRenderer.invoke('ai:explain', process) as Promise<AiExplanation>,
+  exportDiagnostics: (process: ProcessInfo) => ipcRenderer.invoke('diagnostics:export', process) as Promise<DiagnosticsExportResult>
 };
 
 contextBridge.exposeInMainWorld('metalExplorer', api);

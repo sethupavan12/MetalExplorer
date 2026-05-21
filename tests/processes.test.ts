@@ -98,7 +98,11 @@ describe('parseEstablishedLsofOutput', () => {
               remoteAddress: '8.8.8.8',
               remotePort: 443,
               protocol: 'tcp',
-              state: 'ESTABLISHED'
+              state: 'ESTABLISHED',
+              direction: 'outbound',
+              remoteScope: 'public-internet',
+              service: 'HTTPS',
+              encryptedLikely: true
             }
           ]
         ],
@@ -111,7 +115,11 @@ describe('parseEstablishedLsofOutput', () => {
               remoteAddress: '2001:db8:2::1',
               remotePort: 443,
               protocol: 'tcp',
-              state: 'ESTABLISHED'
+              state: 'ESTABLISHED',
+              direction: 'outbound',
+              remoteScope: 'public-internet',
+              service: 'HTTPS',
+              encryptedLikely: true
             }
           ]
         ]
@@ -138,17 +146,22 @@ describe('classifyProcess', () => {
     expect(classifyProcess({ ...vite, ports: [{ address: '*', port: 3000, protocol: 'tcp' }] })).toMatchObject({
       category: 'local-server',
       description: 'Node.js development process exposing a local web service.',
+      confidence: 'high',
+      evidence: ['Matched dev server hint "vite"', 'Listening on TCP 3000'],
       safeToTerminate: true
     });
 
     expect(classifyProcess({ ...logd, ports: [] })).toMatchObject({
       category: 'macos-system',
+      confidence: 'high',
       safeToTerminate: false
     });
 
     expect(classifyProcess({ ...mcp, ports: [] })).toMatchObject({
       category: 'ai-agent',
-      description: 'MCP or AI agent helper process coordinating tool calls or local automation.'
+      description: 'MCP or AI agent helper process coordinating tool calls or local automation.',
+      confidence: 'high',
+      evidence: ['Matched AI/agent hint "mcp"']
     });
   });
 });
@@ -171,6 +184,22 @@ describe('buildProcessSnapshotFromOutputs', () => {
         { address: '127.0.0.1', port: 5173, protocol: 'tcp' }
       ],
       category: 'local-server',
+      confidence: 'high',
+      provenance: {
+        executableName: 'node',
+        executablePath: '/opt/homebrew/bin/node',
+        launchMethod: 'JavaScript toolchain',
+        parentName: null,
+        parentPid: 501,
+        projectPath: '/Users/demo-user/project',
+        commandPreview: '/opt/homebrew/bin/node /Users/demo-user/project/node_modules/.bin/vite --host 127.0.0.1'
+      },
+      serviceGroup: {
+        id: 'project:/Users/demo-user/project',
+        label: 'project',
+        kind: 'project',
+        detail: '/Users/demo-user/project'
+      },
       safeToTerminate: true,
       cleanCandidate: true
     });
@@ -179,7 +208,9 @@ describe('buildProcessSnapshotFromOutputs', () => {
       networkConnections: [
         {
           remoteAddress: '8.8.8.8',
-          remotePort: 443
+          remotePort: 443,
+          service: 'HTTPS',
+          remoteScope: 'public-internet'
         }
       ],
       network: {

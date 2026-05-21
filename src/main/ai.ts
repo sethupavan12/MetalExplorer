@@ -132,6 +132,10 @@ export async function explainProcessWithAi(process: ProcessInfo, settings: AppSe
             uptimeSeconds: process.uptimeSeconds,
             ports: process.ports,
             category: process.category,
+            confidence: process.confidence,
+            evidence: process.evidence,
+            provenance: process.provenance,
+            serviceGroup: process.serviceGroup,
             localDescription: process.description,
             command: redactCommandForAi(process.command),
             safeToTerminateLocally: process.safeToTerminate

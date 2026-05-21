@@ -10,6 +10,8 @@ export type ProcessCategory =
 
 export type RiskLevel = 'low' | 'medium' | 'high' | 'unknown';
 export type ThemeName = 'light' | 'dark' | 'matrix';
+export type ClassificationConfidence = 'high' | 'medium' | 'low';
+export type NetworkRemoteScope = 'public-internet' | 'private-network' | 'loopback' | 'link-local' | 'unknown';
 
 export interface ListeningPort {
   address: string;
@@ -24,6 +26,10 @@ export interface NetworkConnection {
   remotePort: number;
   protocol: 'tcp';
   state: 'ESTABLISHED';
+  direction: 'outbound';
+  remoteScope: NetworkRemoteScope;
+  service: string;
+  encryptedLikely: boolean;
 }
 
 export interface NetworkUsage {
@@ -50,6 +56,23 @@ export interface RawProcessInfo {
   uptimeSeconds: number;
 }
 
+export interface ProcessProvenance {
+  executablePath: string;
+  executableName: string;
+  parentPid: number;
+  parentName: string | null;
+  launchMethod: string;
+  projectPath: string | null;
+  commandPreview: string;
+}
+
+export interface ServiceGroup {
+  id: string;
+  label: string;
+  kind: 'project' | 'runtime' | 'system' | 'app';
+  detail: string;
+}
+
 export interface ProcessInfo extends RawProcessInfo {
   ports: ListeningPort[];
   networkConnections: NetworkConnection[];
@@ -57,6 +80,10 @@ export interface ProcessInfo extends RawProcessInfo {
   category: ProcessCategory;
   description: string;
   tags: string[];
+  confidence: ClassificationConfidence;
+  evidence: string[];
+  provenance: ProcessProvenance;
+  serviceGroup: ServiceGroup;
   safeToTerminate: boolean;
   cleanCandidate: boolean;
   impactScore: number;
@@ -126,6 +153,12 @@ export interface TerminateResult {
   message: string;
 }
 
+export interface DiagnosticsExportResult {
+  ok: boolean;
+  message: string;
+  path?: string;
+}
+
 export interface MetalExplorerApi {
   listProcesses: () => Promise<ProcessSnapshot>;
   terminateProcess: (pid: number) => Promise<TerminateResult>;
@@ -133,4 +166,5 @@ export interface MetalExplorerApi {
   getSettings: () => Promise<AppSettings>;
   updateSettings: (update: SettingsUpdate) => Promise<AppSettings>;
   explainProcess: (process: ProcessInfo) => Promise<AiExplanation>;
+  exportDiagnostics: (process: ProcessInfo) => Promise<DiagnosticsExportResult>;
 }

@@ -7,6 +7,8 @@ import type {
   NetworkUsage,
   ProcessCategory,
   ProcessInfo,
+  ProcessProvenance,
+  ServiceGroup,
   ProcessSnapshot,
   ProcessSummary,
   RawProcessInfo,
@@ -49,6 +51,8 @@ interface Classification {
   category: ProcessCategory;
   description: string;
   tags: string[];
+  confidence: ProcessInfo['confidence'];
+  evidence: string[];
   safeToTerminate: boolean;
   cleanCandidate: boolean;
   riskLevel: ProcessInfo['riskLevel'];
@@ -175,7 +179,11 @@ export function parseEstablishedLsofOutput(output: string): Map<number, NetworkC
       remoteAddress: remote.address,
       remotePort: remote.port,
       protocol: 'tcp',
-      state: 'ESTABLISHED'
+      state: 'ESTABLISHED',
+      direction: 'outbound',
+      remoteScope: classifyRemoteScope(remote.address),
+      service: networkServiceLabel(remote.port),
+      encryptedLikely: isLikelyEncryptedPort(remote.port)
     });
     byPid.set(pid, connections);
   }
@@ -212,6 +220,11 @@ export function classifyProcess(process: RawProcessInfo & { ports: ListeningPort
   const command = process.command.toLowerCase();
   const name = process.name.toLowerCase();
   const isListening = process.ports.length > 0;
+  const databaseHint = findMatchingHint(DATABASE_HINTS, name, command);
+  const aiAgentHint = findMatchingHint(AI_AGENT_HINTS, name, command);
+  const packageToolHint = findMatchingHint(PACKAGE_TOOL_HINTS, name, command);
+  const devServerHint = findMatchingHint(DEV_SERVER_HINTS, name, command);
+  const browserHint = findMatchingHint(BROWSER_HINTS, name, command);
   const isSystem =
     process.user === 'root' ||
     process.command.startsWith('/System/') ||
@@ -224,28 +237,34 @@ export function classifyProcess(process: RawProcessInfo & { ports: ListeningPort
       category: 'macos-system',
       description: 'macOS system service that supports core operating system behavior.',
       tags: ['system'],
+      confidence: 'high',
+      evidence: [process.user === 'root' ? 'Owned by root' : 'Launched from a protected macOS path'],
       safeToTerminate: false,
       cleanCandidate: false,
       riskLevel: 'low'
     };
   }
 
-  if (DATABASE_HINTS.some((hint) => name.includes(hint) || command.includes(hint))) {
+  if (databaseHint) {
     return {
       category: 'database',
       description: 'Local database or stateful storage service.',
       tags: ['database', ...(isListening ? ['port-listener'] : [])],
+      confidence: 'high',
+      evidence: [`Matched database hint "${databaseHint}"`, ...listeningEvidence(process.ports)],
       safeToTerminate: true,
       cleanCandidate: false,
       riskLevel: 'medium'
     };
   }
 
-  if (AI_AGENT_HINTS.some((hint) => command.includes(hint) || name.includes(hint))) {
+  if (aiAgentHint) {
     return {
       category: 'ai-agent',
       description: 'MCP or AI agent helper process coordinating tool calls or local automation.',
       tags: ['ai', 'agent', ...(isListening ? ['port-listener'] : [])],
+      confidence: 'high',
+      evidence: [`Matched AI/agent hint "${aiAgentHint}"`, ...listeningEvidence(process.ports)],
       safeToTerminate: true,
       cleanCandidate: true,
       riskLevel: isListening ? 'medium' : 'low'
@@ -254,35 +273,46 @@ export function classifyProcess(process: RawProcessInfo & { ports: ListeningPort
 
   if (
     isListening &&
-    (PACKAGE_TOOL_HINTS.some((hint) => command.includes(hint) || name.includes(hint)) ||
-      DEV_SERVER_HINTS.some((hint) => command.includes(hint)))
+    (packageToolHint || devServerHint)
   ) {
     return {
       category: 'local-server',
       description: 'Node.js development process exposing a local web service.',
       tags: ['dev-server', 'node', 'port-listener'],
+      confidence: devServerHint ? 'high' : 'medium',
+      evidence: [
+        devServerHint ? `Matched dev server hint "${devServerHint}"` : `Matched package tool hint "${packageToolHint}"`,
+        ...listeningEvidence(process.ports)
+      ],
       safeToTerminate: true,
       cleanCandidate: true,
       riskLevel: 'low'
     };
   }
 
-  if (PACKAGE_TOOL_HINTS.some((hint) => command.includes(hint) || name.includes(hint))) {
+  if (packageToolHint) {
     return {
       category: 'developer-tool',
       description: 'Developer tool or package process running in the background.',
       tags: ['developer-tool'],
+      confidence: 'medium',
+      evidence: [
+        `Matched package tool hint "${packageToolHint}"`,
+        process.uptimeSeconds > 1800 ? 'Running for more than 30 minutes' : 'Short-lived developer process'
+      ],
       safeToTerminate: true,
       cleanCandidate: process.cpuPercent > 1 || process.uptimeSeconds > 1800,
       riskLevel: 'low'
     };
   }
 
-  if (BROWSER_HINTS.some((hint) => command.includes(hint) || name.includes(hint))) {
+  if (browserHint) {
     return {
       category: 'browser',
       description: 'Browser or browser helper process.',
       tags: ['browser'],
+      confidence: 'high',
+      evidence: [`Matched browser hint "${browserHint}"`],
       safeToTerminate: true,
       cleanCandidate: false,
       riskLevel: 'low'
@@ -294,6 +324,8 @@ export function classifyProcess(process: RawProcessInfo & { ports: ListeningPort
       category: 'unknown',
       description: 'Unknown user process exposing a local network port.',
       tags: ['unknown', 'port-listener'],
+      confidence: 'low',
+      evidence: ['No known app or developer-tool rule matched', ...listeningEvidence(process.ports)],
       safeToTerminate: true,
       cleanCandidate: false,
       riskLevel: 'medium'
@@ -304,6 +336,8 @@ export function classifyProcess(process: RawProcessInfo & { ports: ListeningPort
     category: 'user-app',
     description: 'User-owned application or background helper.',
     tags: ['user-process'],
+    confidence: 'low',
+    evidence: ['No specific process rule matched'],
     safeToTerminate: true,
     cleanCandidate: false,
     riskLevel: 'unknown'
@@ -321,10 +355,13 @@ export function buildProcessSnapshotFromOutputs(
 ): ProcessSnapshot {
   const portsByPid = parseLsofOutput(lsofOutput);
   const networkConnectionsByPid = parseEstablishedLsofOutput(establishedLsofOutput);
-  const processes = parsePsOutput(psOutput).map((rawProcess) => {
+  const rawProcesses = parsePsOutput(psOutput);
+  const rawProcessesByPid = new Map(rawProcesses.map((rawProcess) => [rawProcess.pid, rawProcess]));
+  const processes = rawProcesses.map((rawProcess) => {
     const ports = portsByPid.get(rawProcess.pid) ?? [];
     const networkConnections = networkConnectionsByPid.get(rawProcess.pid) ?? [];
     const classification = classifyProcess({ ...rawProcess, ports });
+    const provenance = buildProcessProvenance(rawProcess, rawProcessesByPid);
     const ownedByCurrentUser = rawProcess.user === currentUser;
     const protectedProcess =
       rawProcess.pid <= 1 ||
@@ -343,6 +380,8 @@ export function buildProcessSnapshotFromOutputs(
       networkConnections,
       network: buildNetworkUsage(rawProcess.pid, networkConnections, networkByteSamples, sampledAtMs),
       ...classification,
+      provenance,
+      serviceGroup: buildServiceGroup(rawProcess, classification.category, provenance),
       safeToTerminate,
       cleanCandidate,
       impactScore: calculateImpactScore(rawProcess.cpuPercent, rawProcess.rssKb, ports.length, classification.category)
@@ -434,10 +473,139 @@ function summarizeProcesses(processes: ProcessInfo[], currentUser: string): Proc
   };
 }
 
+function findMatchingHint(hints: string[], name: string, command: string): string | null {
+  return hints.find((hint) => name.includes(hint) || command.includes(hint)) ?? null;
+}
+
+function listeningEvidence(ports: ListeningPort[]): string[] {
+  if (!ports.length) {
+    return [];
+  }
+
+  const portText = ports.length > 3 ? `${ports.slice(0, 3).map((port) => port.port).join(', ')} +${ports.length - 3}` : ports.map((port) => port.port).join(', ');
+  return [`Listening on TCP ${portText}`];
+}
+
 function extractProcessName(command: string): string {
   const firstToken = command.trim().split(/\s+/)[0] ?? 'unknown';
   const cleaned = firstToken.replace(/^"|"$/g, '');
   return cleaned.split('/').filter(Boolean).at(-1) ?? cleaned;
+}
+
+function buildProcessProvenance(process: RawProcessInfo, processesByPid: Map<number, RawProcessInfo>): ProcessProvenance {
+  const tokens = splitCommand(process.command);
+  const executablePath = tokens[0] ?? process.name;
+  const executableName = executablePath.split('/').filter(Boolean).at(-1) ?? process.name;
+  const parent = processesByPid.get(process.ppid);
+
+  return {
+    executablePath,
+    executableName,
+    parentPid: process.ppid,
+    parentName: parent?.name ?? null,
+    launchMethod: detectLaunchMethod(process, parent),
+    projectPath: detectProjectPath(tokens),
+    commandPreview: buildCommandPreview(tokens)
+  };
+}
+
+function buildServiceGroup(process: RawProcessInfo, category: ProcessCategory, provenance: ProcessProvenance): ServiceGroup {
+  if (provenance.projectPath) {
+    const projectName = provenance.projectPath.split('/').filter(Boolean).at(-1) ?? 'Project';
+    return {
+      id: `project:${provenance.projectPath}`,
+      label: projectName,
+      kind: 'project',
+      detail: provenance.projectPath
+    };
+  }
+
+  if (category === 'macos-system') {
+    return {
+      id: 'system:macos',
+      label: 'macOS System',
+      kind: 'system',
+      detail: 'Protected operating system services'
+    };
+  }
+
+  if (category === 'local-server' || category === 'ai-agent' || category === 'database' || category === 'developer-tool') {
+    return {
+      id: `runtime:${category}:${provenance.executableName}`,
+      label: `${provenance.executableName} runtime`,
+      kind: 'runtime',
+      detail: provenance.launchMethod
+    };
+  }
+
+  return {
+    id: `app:${process.name}`,
+    label: process.name,
+    kind: 'app',
+    detail: provenance.launchMethod
+  };
+}
+
+function splitCommand(command: string): string[] {
+  return (
+    command
+      .match(/"[^"]+"|'[^']+'|\S+/g)
+      ?.map((token) => token.replace(/^"|"$/g, '').replace(/^'|'$/g, ''))
+      .filter(Boolean) ?? []
+  );
+}
+
+function detectLaunchMethod(process: RawProcessInfo, parent?: RawProcessInfo): string {
+  const command = process.command.toLowerCase();
+  const name = process.name.toLowerCase();
+  const parentName = parent?.name.toLowerCase();
+
+  if (process.ppid === 1 || parentName === 'launchd') {
+    return 'launchd';
+  }
+
+  if (command.includes('/electron.app/') || name.includes('electron')) {
+    return 'Electron app';
+  }
+
+  if (['npm', 'pnpm', 'yarn', 'bun', 'node', 'deno'].some((tool) => name.includes(tool) || command.includes(`/${tool} `))) {
+    return 'JavaScript toolchain';
+  }
+
+  if (['python', 'ruby', 'go', 'java'].some((tool) => name.includes(tool) || command.includes(`/${tool}`))) {
+    return 'developer runtime';
+  }
+
+  if (parentName) {
+    return `child of ${parent?.name ?? 'parent process'}`;
+  }
+
+  return 'direct process';
+}
+
+function detectProjectPath(tokens: string[]): string | null {
+  const projectToken = tokens.find((token) => token.includes('/node_modules/') || token.includes('/.venv/') || token.includes('/target/') || token.includes('/dist/'));
+
+  if (!projectToken?.startsWith('/')) {
+    return null;
+  }
+
+  const markers = ['/node_modules/', '/.venv/', '/target/', '/dist/'];
+  const marker = markers.find((value) => projectToken.includes(value));
+  if (!marker) {
+    return null;
+  }
+
+  return projectToken.slice(0, projectToken.indexOf(marker));
+}
+
+function buildCommandPreview(tokens: string[]): string {
+  if (!tokens.length) {
+    return 'unknown';
+  }
+
+  const preview = tokens.slice(0, 4).join(' ');
+  return tokens.length > 4 ? `${preview} ...` : preview;
 }
 
 function calculateImpactScore(cpuPercent: number, rssKb: number, portCount: number, category: ProcessCategory): number {
@@ -562,6 +730,71 @@ function isInternetAddress(address: string): boolean {
   }
 
   return true;
+}
+
+function classifyRemoteScope(address: string): ProcessInfo['networkConnections'][number]['remoteScope'] {
+  const normalized = address.toLowerCase().replace(/^\[/, '').replace(/]$/, '');
+
+  if (normalized === 'localhost' || normalized === '::1' || normalized.startsWith('127.')) {
+    return 'loopback';
+  }
+
+  const ipv4 = normalized.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (ipv4) {
+    const first = Number.parseInt(ipv4[1], 10);
+    const second = Number.parseInt(ipv4[2], 10);
+    if (first === 169 && second === 254) {
+      return 'link-local';
+    }
+    if (first === 10 || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168)) {
+      return 'private-network';
+    }
+    return 'public-internet';
+  }
+
+  if (normalized.includes(':')) {
+    if (normalized.startsWith('fe80:')) {
+      return 'link-local';
+    }
+    if (normalized.startsWith('fc') || normalized.startsWith('fd')) {
+      return 'private-network';
+    }
+    return 'public-internet';
+  }
+
+  return 'unknown';
+}
+
+function networkServiceLabel(port: number): string {
+  if (port === 443) {
+    return 'HTTPS';
+  }
+
+  if (port === 80) {
+    return 'HTTP';
+  }
+
+  if (port === 53) {
+    return 'DNS';
+  }
+
+  if (port === 22) {
+    return 'SSH';
+  }
+
+  if (port === 5432) {
+    return 'PostgreSQL';
+  }
+
+  if (port === 27017) {
+    return 'MongoDB';
+  }
+
+  return `TCP ${port}`;
+}
+
+function isLikelyEncryptedPort(port: number): boolean {
+  return [443, 22, 993, 995, 465, 853].includes(port);
 }
 
 function sumNullable(values: Array<number | null>): number | null {

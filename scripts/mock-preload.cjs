@@ -163,8 +163,53 @@ const networkByPid = new Map([
   ]
 ]);
 
+function addReviewMetadata(process) {
+  const executablePath = process.command.split(/\s+/)[0] || process.name;
+  const executableName = executablePath.split('/').filter(Boolean).at(-1) || process.name;
+  const confidence = process.category === 'unknown' ? 'low' : process.category === 'developer-tool' ? 'medium' : 'high';
+  const projectPath = process.command.includes('/node_modules/') ? process.command.slice(0, process.command.indexOf('/node_modules/')).split(/\s+/).at(-1) : null;
+  const evidenceByCategory = {
+    'local-server': ['Matched dev server hint "vite"', 'Listening on TCP 5173, 3000'],
+    'ai-agent': ['Matched AI/agent hint "mcp"'],
+    database: ['Matched database hint "mongod"', 'Listening on TCP 27017'],
+    'macos-system': ['Owned by root'],
+    unknown: ['No known app or developer-tool rule matched', 'Listening on TCP 7331']
+  };
+
+  return {
+    ...process,
+    confidence,
+    evidence: evidenceByCategory[process.category] || ['No specific process rule matched'],
+    provenance: {
+      executablePath,
+      executableName,
+      parentPid: process.ppid,
+      parentName: process.ppid === 1 ? 'launchd' : 'Terminal',
+      launchMethod: process.ppid === 1 ? 'launchd' : process.category === 'local-server' ? 'JavaScript toolchain' : 'child of Terminal',
+      projectPath,
+      commandPreview: process.command.split(/\s+/).slice(0, 4).join(' ')
+    },
+    serviceGroup: {
+      id: projectPath ? `project:${projectPath}` : `${process.category}:${executableName}`,
+      label: projectPath ? projectPath.split('/').filter(Boolean).at(-1) : process.category === 'macos-system' ? 'macOS System' : `${executableName} runtime`,
+      kind: projectPath ? 'project' : process.category === 'macos-system' ? 'system' : 'runtime',
+      detail: projectPath || process.category
+    }
+  };
+}
+
+function enrichConnection(connection) {
+  return {
+    ...connection,
+    direction: 'outbound',
+    remoteScope: 'public-internet',
+    service: connection.remotePort === 443 ? 'HTTPS' : `TCP ${connection.remotePort}`,
+    encryptedLikely: connection.remotePort === 443
+  };
+}
+
 function addNetwork(process) {
-  const networkConnections = networkByPid.get(process.pid) || [];
+  const networkConnections = (networkByPid.get(process.pid) || []).map(enrichConnection);
   const hasNetwork = networkConnections.length > 0;
   return {
     ...process,
@@ -180,7 +225,7 @@ function addNetwork(process) {
   };
 }
 
-const processes = [...seedProcesses, ...generatedProcesses].map(addNetwork);
+const processes = [...seedProcesses, ...generatedProcesses].map(addReviewMetadata).map(addNetwork);
 const currentSettings = {
   baseUrl: 'https://api.openai.com/v1',
   model: 'gpt-4.1-mini',
@@ -239,5 +284,6 @@ contextBridge.exposeInMainWorld('metalExplorer', {
     safeToQuit: 'Safe in the mock environment.',
     riskLevel: 'low',
     recommendedAction: 'Use the local category and ports as the first signal.'
-  })
+  }),
+  exportDiagnostics: async (process) => ({ ok: true, message: `Mock classification report exported for ${process.name}.` })
 });
