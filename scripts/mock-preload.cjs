@@ -503,6 +503,7 @@ const settings = {
   rememberApiKey: false,
   theme: 'light',
   agentUsage: true,
+  agentNotifications: false,
   menuBarMonitor: false,
   hasApiKey: false,
   encryptionAvailable: true

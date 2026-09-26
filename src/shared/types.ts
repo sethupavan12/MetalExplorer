@@ -257,6 +257,7 @@ export interface AppSettings {
   rememberApiKey: boolean;
   theme: ThemeName;
   agentUsage: boolean;
+  agentNotifications: boolean;
   menuBarMonitor: boolean;
   hasApiKey: boolean;
   /** Null until MetalExplorer needs encrypted storage; checking it can trigger a Keychain prompt. */
@@ -270,6 +271,7 @@ export interface SettingsUpdate {
   rememberApiKey?: boolean;
   theme?: ThemeName;
   agentUsage?: boolean;
+  agentNotifications?: boolean;
   menuBarMonitor?: boolean;
   apiKey?: string;
   clearApiKey?: boolean;

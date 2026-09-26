@@ -26,12 +26,13 @@ MetalExplorer's job is to make that machine legible:
 - Orphan detection: MCP servers, dev servers, and build tools whose parent exited are the cleanup queue. Live coding sessions never are.
 - Stop hardening: PID reuse check before every signal, batched stops, AI and exports resolved by PID in the main process.
 - System, Light, Dark, and Matrix themes. Sidebar vibrancy. Optional menu bar monitor.
+- Opt-in "needs your input" notifications when a session finishes its turn.
 
 ## Next: 0.5 "Sessions you can trust"
 
 - Codex and Claude session matching from session files for every agent that publishes one (OpenCode's SQLite store, Gemini CLI checkpoints).
 - Token rate and cost estimate per session with a user-supplied price table. Numbers only, no network lookups.
-- "Session finished" and "needs input" notifications, opt-in, delivered by macOS Notification Center.
+- Needs-input detection for agents beyond Claude Code, and an optional "session ended" notification.
 - Budget guardrails: warn when a session crosses a CPU-time or token threshold you set.
 - Group view: all sessions in one repository side by side, including worktrees.
 - Stop session tree: offer to stop descendants that survive the agent.

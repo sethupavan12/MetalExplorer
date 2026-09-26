@@ -163,6 +163,19 @@ export function buildAgentSessions(processes: ProcessInfo[], roots: AgentRoot[],
   return sessions.sort((a, b) => b.uptimeSeconds - a.uptimeSeconds || a.rootPid - b.rootPid);
 }
 
+/**
+ * Sessions that just finished a turn and are waiting for the user: working in the previous sample, waiting now.
+ * `previous` is updated in place so each transition is reported once.
+ */
+export function sessionsNeedingInput(previous: Map<string, AgentSessionStatus>, sessions: AgentSession[]): AgentSession[] {
+  const needing = sessions.filter((session) => session.status === 'waiting' && previous.get(session.id) === 'working');
+  previous.clear();
+  for (const session of sessions) {
+    previous.set(session.id, session.status);
+  }
+  return needing;
+}
+
 export function parseResumeId(command: string): string | null {
   const tokens = splitArgs(command);
   for (let index = 0; index < tokens.length; index += 1) {

@@ -203,7 +203,8 @@ The UI requires confirmation in a review sheet for every stop, including cleanup
 - "Show in <terminal>" runs `/usr/bin/open -a` on the terminal app bundle that hosts a session.
 - "Open Folder" opens a session's working directory in Finder.
 - "Copy" actions write to the macOS clipboard.
-- The menu bar monitor, when enabled, samples processes on the same interval while MetalExplorer is running. It does not start at login.
+- The menu bar monitor and agent notifications, when enabled, keep sampling on the same interval while MetalExplorer is running, even with the window hidden. Neither starts at login.
+- Agent notifications are posted locally through macOS Notification Center. They include the session name, agent, terminal, and tty.
 
 ## Classification reports
 

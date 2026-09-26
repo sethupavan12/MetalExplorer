@@ -84,6 +84,12 @@ export function SettingsView({ settings, rules, onUpdate, onRulesChange, onReset
           >
             <Switch label="Session insights" checked={settings.agentUsage} onChange={(value) => void onUpdate({ agentUsage: value })} />
           </SettingsRow>
+          <SettingsRow
+            label="Notify when an agent needs input"
+            detail={settings.agentUsage ? 'A macOS notification when a session finishes its turn, while MetalExplorer is open. Claude Code reports this today.' : 'Needs session insights, which tell MetalExplorer when an agent is waiting for you.'}
+          >
+            <Switch label="Notify when an agent needs input" checked={settings.agentNotifications} disabled={!settings.agentUsage} onChange={(value) => void onUpdate({ agentNotifications: value })} />
+          </SettingsRow>
         </SettingsGroup>
 
         <SettingsGroup title="AI explanations" footer="Explanations run only when you click Explain. MetalExplorer sends a redacted summary of that one process to the endpoint below.">

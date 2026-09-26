@@ -68,8 +68,9 @@ Cleanup candidates need positive evidence: an MCP server or dev tool whose paren
 
 All stops go through `Sampler.terminate(pids)`:
 
-- The PID must be an integer greater than 1 and present in the last sample the user reviewed.
-- A fresh `ps` lookup must show the same command and owner, and an uptime that has not reset. Otherwise the PID was reused and nothing is sent.
+- The review sheet freezes the processes it shows. The renderer sends each one's PID, command, and start time (the identity the user approved), never a bare PID.
+- A fresh `ps` lookup must match that approved identity (same command, start time within 3 seconds). Otherwise the PID was reused and nothing is sent.
+- The latest sample must also match it, and must mark the process as stoppable.
 - The reviewed process must be marked safe to terminate, owned by the current user, and not MetalExplorer or Electron.
 
 Only `SIGTERM` is sent. There is no `SIGKILL` path.

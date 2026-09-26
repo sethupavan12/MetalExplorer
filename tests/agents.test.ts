@@ -10,7 +10,8 @@ import {
   findAgentRoots,
   parseClaudeSessionState,
   parseLsofCwdOutput,
-  parseResumeId
+  parseResumeId,
+  sessionsNeedingInput
 } from '../src/main/agents';
 import { buildProcessesFromOutputs } from '../src/main/processes';
 
@@ -113,6 +114,17 @@ describe('buildAgentSessions', () => {
     const [claude] = buildAgentSessions(withoutVitest, findAgentRoots(withoutVitest), inputs).filter((session) => session.kind === 'claude');
     expect(claude.cpuTimeSeconds).toBe(14.4);
     expect(claude.processCount).toBe(2);
+  });
+});
+
+describe('sessionsNeedingInput', () => {
+  it('reports each working to waiting transition once', () => {
+    const previous = new Map();
+    const session = (status: 'working' | 'waiting' | 'idle') => ({ id: 'claude:1', status }) as never;
+    expect(sessionsNeedingInput(previous, [session('waiting')])).toEqual([]);
+    expect(sessionsNeedingInput(previous, [session('working')])).toEqual([]);
+    expect(sessionsNeedingInput(previous, [session('waiting')])).toHaveLength(1);
+    expect(sessionsNeedingInput(previous, [session('waiting')])).toEqual([]);
   });
 });
 

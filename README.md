@@ -24,7 +24,7 @@ Activity Monitor shows a flat list of `node` and `claude`. MetalExplorer shows w
 - Shows the terminal (WezTerm, iTerm2, Terminal, Ghostty, VS Code, Cursor, and more), tmux or zellij, tty, and folder.
 - Opt-in session insights read the usage counters Claude Code and Codex already keep: tokens, model, context size, branch, and whether the agent is working or needs your input.
 - Bring the terminal forward, open the folder, copy the resume command, or stop a session after a review sheet.
-- Optional menu bar monitor with working agents and CPU.
+- Optional notification when a session finishes its turn and needs your input, and an optional menu bar monitor.
 
 <p align="center">
   <img src="docs/assets/metalexplorer-agents.png" alt="Agents view in dark mode listing four coding agent sessions with status, CPU sparklines, memory, and tokens, and an inspector with compute and token details" width="960">

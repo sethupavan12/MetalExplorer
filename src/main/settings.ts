@@ -11,6 +11,7 @@ interface StoredSettings {
   rememberApiKey: boolean;
   theme: ThemeName;
   agentUsage: boolean;
+  agentNotifications: boolean;
   menuBarMonitor: boolean;
   encryptedApiKey?: string;
 }
@@ -22,6 +23,7 @@ const DEFAULT_SETTINGS: StoredSettings = {
   rememberApiKey: false,
   theme: 'system',
   agentUsage: false,
+  agentNotifications: false,
   menuBarMonitor: false
 };
 
@@ -46,6 +48,7 @@ export function getSettings(): AppSettings {
     rememberApiKey: stored.rememberApiKey,
     theme: stored.theme,
     agentUsage: stored.agentUsage,
+    agentNotifications: stored.agentNotifications,
     menuBarMonitor: stored.menuBarMonitor,
     hasApiKey: Boolean(memoryApiKey || stored.encryptedApiKey),
     encryptionAvailable
@@ -70,6 +73,7 @@ export function updateSettings(update: SettingsUpdate): AppSettings {
     rememberApiKey: typeof update.rememberApiKey === 'boolean' ? update.rememberApiKey : previous.rememberApiKey,
     theme: normalizeTheme(update.theme ?? previous.theme),
     agentUsage: typeof update.agentUsage === 'boolean' ? update.agentUsage : previous.agentUsage,
+    agentNotifications: typeof update.agentNotifications === 'boolean' ? update.agentNotifications : previous.agentNotifications,
     menuBarMonitor: typeof update.menuBarMonitor === 'boolean' ? update.menuBarMonitor : previous.menuBarMonitor,
     encryptedApiKey: previous.encryptedApiKey
   };
@@ -119,6 +123,7 @@ function readStoredSettingsFromDisk(): StoredSettings {
       rememberApiKey: Boolean(parsed.rememberApiKey),
       theme: normalizeTheme(parsed.theme),
       agentUsage: parsed.agentUsage === true,
+      agentNotifications: parsed.agentNotifications === true,
       menuBarMonitor: parsed.menuBarMonitor === true,
       encryptedApiKey: typeof parsed.encryptedApiKey === 'string' ? parsed.encryptedApiKey : undefined
     };

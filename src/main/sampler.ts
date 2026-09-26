@@ -48,7 +48,9 @@ export class Sampler {
   private lastSnapshot: ProcessSnapshot | null = null;
   private lastSampleAt = 0;
 
-  constructor(private readonly options: { agentInsights: () => boolean; intervalMs: () => number }) {}
+  constructor(
+    private readonly options: { agentInsights: () => boolean; intervalMs: () => number; onSnapshot?: (snapshot: ProcessSnapshot) => void }
+  ) {}
 
   get latest(): ProcessSnapshot | null {
     return this.lastSnapshot;
@@ -157,6 +159,7 @@ export class Sampler {
 
     this.lastSnapshot = snapshot;
     this.lastSampleAt = Date.now();
+    this.options.onSnapshot?.(snapshot);
     return snapshot;
   }
 

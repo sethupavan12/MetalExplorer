@@ -1,21 +1,24 @@
-import { BrowserWindow, Menu, Tray, app, clipboard, dialog, ipcMain, nativeImage, nativeTheme, screen, shell } from 'electron';
+import { BrowserWindow, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, nativeImage, nativeTheme, screen, shell } from 'electron';
 import type { MenuItemConstructorOptions } from 'electron';
 import { execFile } from 'node:child_process';
 import { readFileSync, statSync, writeFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { explainProcessWithAi, redactCommandForAi } from './ai';
+import { sessionsNeedingInput } from './agents';
 import { Sampler } from './sampler';
 import { getAiSettings, getSettings, updateSettings } from './settings';
 import { isAllowedLocalHttpUrl } from './url-guards';
-import type { AppSettings, MenuCommand, ProcessSnapshot, SettingsUpdate, TerminateTarget, ThemeName } from '../shared/types';
+import type { AgentSessionStatus, AppSettings, MenuCommand, ProcessSnapshot, SettingsUpdate, TerminateTarget, ThemeName } from '../shared/types';
 
 const sampler = new Sampler({
   agentInsights: () => getSettings().agentUsage,
-  intervalMs: () => getSettings().refreshMs
+  intervalMs: () => getSettings().refreshMs,
+  onSnapshot: handleSnapshot
 });
 
 let mainWindow: BrowserWindow | null = null;
+const agentStatuses = new Map<string, AgentSessionStatus>();
 let rendererReady = false;
 let pendingCommand: MenuCommand | null = null;
 let tray: Tray | null = null;
@@ -114,7 +117,7 @@ app.whenReady().then(() => {
   // Prime the sampler so the first screen already has measured CPU and network deltas.
   void sampler.sample().catch(() => undefined);
   createWindow();
-  syncTray(getSettings());
+  syncBackground(getSettings());
 
   app.on('activate', () => showMainWindow());
 });
@@ -253,7 +256,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle('settings:update', (_event, update: unknown) => {
     const next = updateSettings(sanitizeSettingsUpdate(update));
     applyTheme(next.theme);
-    syncTray(next);
+    syncBackground(next);
     return next;
   });
   ipcMain.handle('ai:explain', (_event, pid: unknown) => {
@@ -294,6 +297,7 @@ function sanitizeSettingsUpdate(value: unknown): SettingsUpdate {
   if (typeof input.theme === 'string') update.theme = input.theme as ThemeName;
   if (typeof input.agentUsage === 'boolean') update.agentUsage = input.agentUsage;
   if (typeof input.menuBarMonitor === 'boolean') update.menuBarMonitor = input.menuBarMonitor;
+  if (typeof input.agentNotifications === 'boolean') update.agentNotifications = input.agentNotifications;
   if (typeof input.apiKey === 'string') update.apiKey = input.apiKey;
   if (input.clearApiKey === true) update.clearApiKey = true;
   return update;
@@ -316,35 +320,49 @@ function applyTheme(theme: ThemeName): void {
   nativeTheme.themeSource = theme === 'system' ? 'system' : theme === 'light' ? 'light' : 'dark';
 }
 
-/** Optional menu bar monitor. It only runs while the app is open and never starts at login. */
-function syncTray(settings: AppSettings): void {
-  if (!settings.menuBarMonitor) {
-    if (trayTimer) {
-      clearInterval(trayTimer);
-      trayTimer = null;
-    }
-    tray?.destroy();
-    tray = null;
-    return;
-  }
-
-  if (!tray) {
+/**
+ * Background sampling for the optional menu bar monitor and agent notifications. It runs only while the app is open,
+ * only when one of those features is on, and never starts at login.
+ */
+function syncBackground(settings: AppSettings): void {
+  if (settings.menuBarMonitor && !tray) {
     tray = new Tray(nativeImage.createEmpty());
     tray.setToolTip('MetalExplorer');
     tray.setTitle('ME');
+    if (sampler.latest) updateTray(sampler.latest);
+  } else if (!settings.menuBarMonitor && tray) {
+    tray.destroy();
+    tray = null;
   }
 
   if (trayTimer) {
     clearInterval(trayTimer);
+    trayTimer = null;
   }
-  const update = (): void => {
-    void sampler
-      .sample(settings.refreshMs)
-      .then(updateTray)
-      .catch(() => undefined);
-  };
-  update();
-  trayTimer = setInterval(update, Math.max(3000, settings.refreshMs));
+  if (settings.menuBarMonitor || settings.agentNotifications) {
+    const tick = (): void => void sampler.sample(settings.refreshMs).catch(() => undefined);
+    tick();
+    trayTimer = setInterval(tick, Math.max(3000, settings.refreshMs));
+  }
+}
+
+function handleSnapshot(snapshot: ProcessSnapshot): void {
+  if (tray) updateTray(snapshot);
+
+  const needing = sessionsNeedingInput(agentStatuses, snapshot.agents);
+  const settings = getSettings();
+  if (!settings.agentNotifications || !Notification.isSupported() || mainWindow?.isFocused()) {
+    return;
+  }
+  for (const session of needing.slice(0, 3)) {
+    const notification = new Notification({
+      title: `${session.title ?? session.projectName} needs your input`,
+      body: `${session.label}${session.host ? ` in ${session.host.name}` : ''}${session.tty ? ` · ${session.tty}` : ''}`,
+      silent: false
+    });
+    notification.on('click', () => showMainWindow({ type: 'focus-agent', sessionId: session.id }));
+    notification.show();
+  }
 }
 
 function updateTray(snapshot: ProcessSnapshot): void {
