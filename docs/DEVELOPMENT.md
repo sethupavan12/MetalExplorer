@@ -84,15 +84,19 @@ scripts
 
 ## Working on process parsing
 
-Most process behavior is in `src/main/processes.ts`.
+Process parsing and classification live in `src/main/processes.ts`. Cross-sample state (CPU and network deltas, history, guarded stops) lives in `src/main/sampler.ts`. Coding agent detection lives in `src/main/agent-catalog.ts` and `src/main/agents.ts`; token usage parsing in `src/main/agent-usage.ts`.
 
 Run tests after changes:
 
 ```bash
-npm test -- tests/processes.test.ts
+npm test -- tests/processes.test.ts tests/agents.test.ts
 ```
 
-Any change to `parsePsOutput`, `parseLsofOutput`, `parseEstablishedLsofOutput`, `classifyProcess`, or `terminateProcessByPid` should include a test.
+Any change to `parsePsOutput`, `parseLsofOutput`, `parseEstablishedLsofOutput`, `classifyProcess`, `detectCodingAgent`, `buildAgentSessions`, the usage readers, or `Sampler.terminate` should include a test.
+
+## Adding a coding agent
+
+Add an entry to `CODING_AGENTS` in `src/main/agent-catalog.ts` with the exact executable names and npm package paths, then add a color and monogram in `src/renderer/lib/model.ts` and a detection test in `tests/agents.test.ts`. Matching is exact on purpose; never add substring hints.
 
 ## Working on AI explanations
 
@@ -115,7 +119,7 @@ The UI should show the summary, not raw JSON.
 
 ## Working on UI
 
-The main UI lives in `src/renderer/App.tsx` and `src/renderer/styles.css`.
+The app shell is `src/renderer/App.tsx`. Views live in `src/renderer/views`, shared components in `src/renderer/components`, and pure helpers in `src/renderer/lib`. Design tokens and themes are at the top of `src/renderer/styles.css`.
 
 After UI changes:
 
@@ -123,7 +127,7 @@ After UI changes:
 npm run visual:smoke
 ```
 
-Use the generated screenshots in `release/visual-smoke-*.png` for visual inspection. Do not commit `release/` artifacts.
+The smoke test renders every view in Light, Dark, and Matrix, fails on layout regressions, and writes screenshots to `release/visual/`. Set `SMOKE_WIDTH` and `SMOKE_HEIGHT` to check other window sizes (the default window is 1320x860). Do not commit `release/` artifacts.
 
 ## Troubleshooting
 

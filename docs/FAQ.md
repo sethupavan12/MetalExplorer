@@ -10,19 +10,25 @@ MetalExplorer is a process explainability tool. It helps you see local servers, 
 
 No automatic upload.
 
-The app reads local process data and keeps snapshots in memory. It sends selected process details only when you click `AI Explain`.
+The app reads local process data and keeps snapshots in memory. It sends selected process details only when you click `Explain`.
 
 ## Can AI explanations leak secrets?
 
-They can if another process includes secrets in command-line arguments and you click `AI Explain` for that process.
+MetalExplorer redacts common secret patterns first, but unusual formats can slip through if another process puts secrets in command-line arguments and you click `Explain` for it.
 
 Review the command field before using AI explanations on sensitive machines.
 
-## Why does Network show service names instead of remote IPs?
+## Which coding agents does it detect?
 
-Primary rows summarize remote ports as services like HTTPS, HTTP, DNS, SSH, or TCP port labels. Raw endpoint noise makes the UI harder to scan and can overflow table cells.
+Claude Code, Codex, OpenCode, Gemini CLI, Aider, Amp, Goose, Crush, Qwen Code, Cursor Agent, Copilot CLI, Factory Droid, and Kiro CLI. Detection uses exact executable names and package paths, so a process has to actually be the agent CLI.
 
-Future versions can add an advanced details toggle for users who need raw endpoints.
+## Does MetalExplorer read my agent conversations?
+
+No. With session insights turned on, it reads Claude Code and Codex session files only to extract token counts, model names, branch names, timestamps, and status. Prompts, replies, and tool output are skipped and never stored or sent. Without session insights, the Agents view uses process data only.
+
+## Why is a session "Needs input"?
+
+For Claude Code with session insights on, the status comes from Claude Code itself. For other agents, MetalExplorer estimates status from recent CPU use and transcript activity, so treat it as a hint.
 
 ## Why does upload/download sometimes show "measuring" or "unavailable"?
 

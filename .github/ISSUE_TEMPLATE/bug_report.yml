@@ -58,14 +58,15 @@ body:
     attributes:
       label: Area
       options:
-        - Dashboard
+        - Overview
+        - Agents
         - Processes
         - Services
-        - Agents
-        - Cleanup
         - Network
+        - Cleanup
         - Settings
         - AI Explain
+        - Menu bar monitor
         - Packaging or install
         - Other
     validations:

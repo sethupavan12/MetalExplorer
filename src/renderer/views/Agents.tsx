@@ -77,7 +77,7 @@ export function AgentsView({ agents, query, selectedId, settings, onSelect, onEn
             title: 'Tokens',
             width: '76px',
             align: 'right' as const,
-            render: (session: AgentSession) => <span className="mono">{session.usage ? formatTokens(session.usage.totalTokens) : '—'}</span>
+            render: (session: AgentSession) => <span className="mono">{session.usage ? formatTokens(session.usage.totalTokens) : '-'}</span>
           }
         ]
       : []),
@@ -263,7 +263,7 @@ export function AgentInspector({ session, settings, onFocusHost, onReveal, onCop
             ) : null}
             <PropertyList>
               <Property label="Model" mono>
-                {usage.model ?? '—'}
+                {usage.model ?? '-'}
               </Property>
               <Property label="Input" mono>
                 {formatTokens(usage.inputTokens)}
@@ -314,7 +314,7 @@ export function AgentInspector({ session, settings, onFocusHost, onReveal, onCop
           <Property label="Terminal">{session.host?.name ?? 'Not found'}</Property>
           {session.multiplexer ? <Property label="Multiplexer">{session.multiplexer}</Property> : null}
           <Property label="TTY" mono>
-            {session.tty ?? '—'}
+            {session.tty ?? '-'}
           </Property>
           {session.resumeId ? (
             <Property label="Session ID" mono title={session.resumeId}>

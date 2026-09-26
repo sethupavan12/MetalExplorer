@@ -13,8 +13,9 @@ This document is the safety contract.
 - No kernel extension.
 - No admin privileges.
 - No automatic AI calls.
-- No full process snapshots saved.
+- No process snapshots or process history saved to disk.
 - No remote-destination history saved.
+- Coding agent session insights are opt-in and read numbers only.
 - Termination is guarded and uses `SIGTERM`.
 
 ## What MetalExplorer reads
@@ -25,6 +26,8 @@ MetalExplorer reads local macOS process and network state using standard tools:
 /bin/ps
 /usr/sbin/lsof
 /usr/bin/nettop
+/usr/bin/vm_stat
+/usr/sbin/sysctl   (kern.memorystatus_vm_pressure_level, vm.swapusage)
 ```
 
 It reads:
@@ -38,7 +41,24 @@ It reads:
 - listening TCP ports
 - established internet TCP connections
 - network byte samples when `nettop` provides them
+- cumulative CPU time and controlling terminal (tty) for each process
+- the working directory of detected coding agent processes (`lsof -d cwd`), so sessions can show their folder
+- system memory statistics, memory pressure, and swap use
 - local classification evidence and launch/provenance signals derived from the same process data
+
+## Coding agent session insights
+
+The Agents view works without reading any agent files. It groups each agent's process tree and shows CPU, memory, CPU time, processes, ports, terminal, and folder from the process data above.
+
+"Session insights" is off by default. When you turn it on in Settings, MetalExplorer also reads files that coding agents already write on this Mac:
+
+- `~/.claude/sessions/<pid>.json` for a running Claude Code process: session id, working directory, session name, and busy/idle status. Other fields are ignored.
+- `~/.claude/projects/<folder>/<session>.jsonl`: token usage numbers, model name, git branch, and timestamps from assistant messages.
+- `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`: session id, working directory, model name, cumulative token counts, context window, and timestamps.
+
+`CLAUDE_CONFIG_DIR` and `CODEX_HOME` are respected when set.
+
+MetalExplorer does not keep prompts, replies, tool output, or file contents from these files. Lines are parsed only to extract the numeric usage fields and names listed above, and results stay in memory. Nothing is written back to these files, and nothing is sent anywhere.
 
 ## What MetalExplorer does not do
 
@@ -53,7 +73,8 @@ MetalExplorer does not:
 - request admin permissions
 - packet-sniff network traffic
 - read file contents from your projects
-- save process snapshots to disk
+- read prompts or replies from coding agent transcripts
+- save process snapshots or process history to disk
 - upload process data automatically
 
 ## Local storage
@@ -67,7 +88,10 @@ Saved:
 - refresh interval
 - theme
 - remember-key preference
+- session insights and menu bar monitor preferences
 - encrypted API key, only if explicitly enabled
+
+Window size and position are stored in `window-state.json` in the same directory.
 
 Not saved:
 
@@ -82,15 +106,13 @@ Renderer-local preferences are stored in browser local storage for the current m
 
 Saved locally:
 
-- pane widths
-- collapsed sidebar preference
-- filter visibility preference
-- user process rules such as "always keep" and "always flag"
-- resource trend samples capped to 24 hours
+- last open view, sort order, and list or tree layout
+- sidebar and inspector visibility
+- user process rules such as "always keep" and "always flag", and the rule profile
 
-Resource trend samples are intentionally minimal. They store process name, category, a local trend key, timestamp, CPU, memory, and aggregate upload/download byte rates. They do not store full command strings, command arguments, remote hosts, remote ports, AI responses, or termination history.
+The charts in the app (system CPU, memory, network, per-process and per-session history) are kept in memory for the last few minutes and are dropped when the app quits. Earlier versions stored 24 hours of per-process resource trends in local storage; the current version deletes that data on first launch.
 
-The Settings screen includes a control to clear local trends and user rules.
+The Settings screen includes a control to reset user rules.
 
 ## API keys
 
@@ -104,7 +126,7 @@ Important: anyone with access to your unlocked macOS user account may still be a
 
 AI explanations are optional.
 
-MetalExplorer sends process details to the configured AI endpoint only when you click `AI Explain`.
+MetalExplorer sends process details to the configured AI endpoint only when you click `Explain`. The main process looks up the process by PID in its own latest sample, so the renderer cannot change what is sent.
 
 The payload can include:
 
@@ -141,7 +163,7 @@ This is a safety layer, not a guarantee. Unusual secret formats may not be recog
 For sensitive machines:
 
 - avoid AI explanations unless you trust the endpoint
-- review the command field before clicking `AI Explain`
+- review the command field before clicking `Explain`
 - prefer local or self-hosted OpenAI-compatible endpoints when needed
 
 ## Network view
@@ -162,17 +184,26 @@ MetalExplorer uses `SIGTERM`.
 
 It does not use `SIGKILL`.
 
-Before terminating, the app refreshes process state and checks:
+Before terminating, the app checks the live process against the one you reviewed:
 
 - PID is valid and greater than 1
+- PID was in the reviewed sample
 - process still exists
+- it is still the same process (same command, same owner, not restarted), so a reused PID is never signalled
 - process is owned by the current macOS user
 - process is not MetalExplorer
 - process is not root-owned
 - process is not a protected macOS system path
 - local classifier marks it as safe to terminate
 
-The UI also requires confirmation for selected-process termination.
+The UI requires confirmation in a review sheet for every stop, including cleanup batches and coding agent sessions. Stopping a coding agent session sends `SIGTERM` to the agent process only; its children usually exit with it.
+
+## Other local actions
+
+- "Show in <terminal>" runs `/usr/bin/open -a` on the terminal app bundle that hosts a session.
+- "Open Folder" opens a session's working directory in Finder.
+- "Copy" actions write to the macOS clipboard.
+- The menu bar monitor, when enabled, samples processes on the same interval while MetalExplorer is running. It does not start at login.
 
 ## Classification reports
 
@@ -220,6 +251,7 @@ Any future feature that adds one of the following must update this document befo
 - process history
 - network history
 - automatic AI calls
+- reading new agent or application files
 - background daemon
 - login item
 - new external network request

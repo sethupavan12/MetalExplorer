@@ -36,7 +36,7 @@ Please report issues involving:
 - The renderer runs with `contextIsolation: true` and `nodeIntegration: false`.
 - OS access lives in the Electron main process.
 - The preload bridge exposes only a typed `metalExplorer` API.
-- AI calls happen only after `AI Explain` is clicked.
+- AI calls happen only after `Explain` is clicked.
 - API keys are in memory by default.
 - Remembered API keys use Electron `safeStorage` when available.
 

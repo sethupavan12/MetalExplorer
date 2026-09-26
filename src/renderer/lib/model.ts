@@ -446,8 +446,8 @@ function shellQuote(value: string): string {
 
 export function networkLabel(process: ProcessInfo): string {
   if (process.network.status !== 'available') {
-    return process.networkConnections.length ? formatRate(null, process.network.status) : '—';
+    return process.networkConnections.length ? formatRate(null, process.network.status) : '-';
   }
   const total = trafficBps(process);
-  return total ? formatRate(total) : '—';
+  return total ? formatRate(total) : '-';
 }

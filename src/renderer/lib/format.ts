@@ -21,7 +21,7 @@ export function formatKb(kb: number): string {
 
 export function formatRate(bps: number | null, status?: NetworkUsage['status']): string {
   if (bps === null) {
-    return status === 'measuring' ? 'Measuring' : '—';
+    return status === 'measuring' ? 'Measuring' : '-';
   }
   if (bps === 0) {
     return '0 B/s';
@@ -38,7 +38,7 @@ export function formatPercent(value: number): string {
 
 export function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) {
-    return '—';
+    return '-';
   }
   if (seconds < 60) {
     return `${Math.round(seconds)}s`;
@@ -77,7 +77,7 @@ export function formatCpuTime(seconds: number): string {
 
 export function formatTokens(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {
-    return '—';
+    return '-';
   }
   if (value < 1000) {
     return String(value);
@@ -93,11 +93,11 @@ export function formatTokens(value: number | null | undefined): string {
 
 export function formatRelativeTime(iso: string | null, now = Date.now()): string {
   if (!iso) {
-    return '—';
+    return '-';
   }
   const time = Date.parse(iso);
   if (!Number.isFinite(time)) {
-    return '—';
+    return '-';
   }
   const seconds = Math.max(0, Math.round((now - time) / 1000));
   if (seconds < 5) {
@@ -111,7 +111,7 @@ export function formatRelativeTime(iso: string | null, now = Date.now()): string
 
 export function formatClock(iso: string): string {
   const time = new Date(iso);
-  return Number.isNaN(time.getTime()) ? '—' : time.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+  return Number.isNaN(time.getTime()) ? '-' : time.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
 }
 
 export function pluralize(count: number, singular: string, plural = `${singular}s`): string {
@@ -120,7 +120,7 @@ export function pluralize(count: number, singular: string, plural = `${singular}
 
 export function shortenPath(path: string | null, home?: string): string {
   if (!path) {
-    return '—';
+    return '-';
   }
   const userHome = home ?? path.match(/^\/Users\/[^/]+/)?.[0];
   return userHome && path.startsWith(userHome) ? `~${path.slice(userHome.length)}` : path;

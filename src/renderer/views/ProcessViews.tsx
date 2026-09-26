@@ -132,7 +132,7 @@ export function ProcessesTable({ rows, treeMode, collapsed, selectedPid, sort, o
       title: 'Ports',
       width: '72px',
       sortKey: 'ports',
-      render: ({ process }) => <span className="mono muted">{portsText(process) || '—'}</span>
+      render: ({ process }) => <span className="mono muted">{portsText(process) || '-'}</span>
     },
     {
       id: 'network',
@@ -226,7 +226,7 @@ export function ServicesTable({
           </span>
         ) : (
           <span className="muted truncate" title={process.provenance.launchMethod}>
-            {process.provenance.parentName ?? '—'}
+            {process.provenance.parentName ?? '-'}
           </span>
         );
       }
@@ -288,7 +288,7 @@ export function NetworkTable({
       id: 'remote',
       title: 'Talking to',
       width: 'minmax(220px, 2fr)',
-      render: (process) => <span className="mono muted truncate">{remoteSummary(process) || '—'}</span>
+      render: (process) => <span className="mono muted truncate">{remoteSummary(process) || '-'}</span>
     },
     { id: 'conn', title: 'Conn.', width: '64px', align: 'right', sortKey: 'connections', render: (process) => <span className="mono">{process.networkConnections.length}</span> },
     {
