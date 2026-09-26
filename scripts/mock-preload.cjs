@@ -96,10 +96,10 @@ const processes = [
   system('coreaudiod', 530, { user: '_coreaudiod', cpuPercent: 1.2, rssKb: 22_000 }),
 
   proc({ name: 'wezterm-gui', pid: 1503, executable: '/Applications/WezTerm.app/Contents/MacOS/wezterm-gui', cpuPercent: 3.4, rssKb: 280_000, cpuTimeSeconds: 1880, description: 'Part of the WezTerm app.', evidence: ['Executable lives inside WezTerm.app'] }),
-  proc({ name: 'zsh', pid: 1516, ppid: 1503, command: '-zsh', tty: 'ttys000', rssKb: 3000, confidence: 'low' }),
-  proc({ name: 'tmux', pid: 1600, ppid: 1516, executable: '/opt/homebrew/bin/tmux', tty: 'ttys000', rssKb: 6000, confidence: 'low' }),
+  proc({ name: 'zsh', pid: 1516, ppid: 1503, command: '-zsh', tty: 'ttys000', rssKb: 3000, tags: ['shell'], description: 'zsh shell in ttys000.' }),
+  proc({ name: 'tmux', pid: 1600, ppid: 1516, executable: '/opt/homebrew/bin/tmux', tty: 'ttys000', rssKb: 6000, tags: ['terminal'], description: 'tmux terminal session manager.' }),
 
-  proc({ name: 'zsh', pid: 51740, ppid: 1600, command: '-zsh', tty: 'ttys011', rssKb: 3000, confidence: 'low' }),
+  proc({ name: 'zsh', pid: 51740, ppid: 1600, command: '-zsh', tty: 'ttys011', rssKb: 3000, tags: ['shell'], description: 'zsh shell in ttys011.' }),
   proc({
     name: 'claude',
     pid: 52209,
@@ -174,7 +174,7 @@ const processes = [
     agentSessionId: 'claude:52209'
   }),
 
-  proc({ name: 'zsh', pid: 60010, ppid: 1600, command: '-zsh', tty: 'ttys004', rssKb: 3000, confidence: 'low' }),
+  proc({ name: 'zsh', pid: 60010, ppid: 1600, command: '-zsh', tty: 'ttys004', rssKb: 3000, tags: ['shell'], description: 'zsh shell in ttys004.' }),
   proc({
     name: 'codex',
     pid: 60020,
@@ -194,7 +194,7 @@ const processes = [
   }),
 
   proc({ name: 'iTerm2', pid: 2100, executable: '/Applications/iTerm.app/Contents/MacOS/iTerm2', cpuPercent: 1.1, rssKb: 190_000, description: 'Part of the iTerm app.' }),
-  proc({ name: 'zsh', pid: 2150, ppid: 2100, command: '-zsh', tty: 'ttys007', rssKb: 3000, confidence: 'low' }),
+  proc({ name: 'zsh', pid: 2150, ppid: 2100, command: '-zsh', tty: 'ttys007', rssKb: 3000, tags: ['shell'], description: 'zsh shell in ttys007.' }),
   proc({
     name: 'opencode',
     pid: 2160,
@@ -211,7 +211,7 @@ const processes = [
     evidence: ['Executable identified as OpenCode'],
     agentSessionId: 'opencode:2160'
   }),
-  proc({ name: 'zsh', pid: 2170, ppid: 2100, command: '-zsh', tty: 'ttys008', rssKb: 3000, confidence: 'low' }),
+  proc({ name: 'zsh', pid: 2170, ppid: 2100, command: '-zsh', tty: 'ttys008', rssKb: 3000, tags: ['shell'], description: 'zsh shell in ttys008.' }),
   proc({
     name: 'node',
     pid: 2180,

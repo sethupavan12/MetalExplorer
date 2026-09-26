@@ -119,6 +119,8 @@ const SYSTEM_NAMES = new Set([
   'UserEventAgent'
 ]);
 const PROTECTED_PATH_PREFIXES = ['/System/', '/usr/libexec/', '/usr/sbin/', '/sbin/', '/Library/Apple/', '/private/var/db/', '/System/Volumes/Preboot/Cryptexes/'];
+const SHELL_NAMES = new Set(['zsh', 'bash', 'fish', 'sh', 'dash', 'ksh', 'tcsh', 'nu', 'xonsh', 'login']);
+const TERMINAL_TOOL_NAMES = new Set(['tmux', 'zellij', 'screen', 'herdr', 'abduco', 'dtach', 'tmate', 'mosh-server']);
 const MCP_PATTERN = /(^|[-_@/.])mcp([-_./]|$)|modelcontextprotocol/;
 const ORPHAN_MIN_UPTIME_SECONDS = 10 * 60;
 /** Past this gap (for example after the window was hidden), a delta is an average over the gap, not current use. */
@@ -482,6 +484,21 @@ export function classifyProcess(process: RawProcessInfo & { ports: ListeningPort
       safeToTerminate: true,
       cleanCandidate: false,
       riskLevel: isListening && process.ports.some((port) => isWildcardAddress(port.address)) ? 'medium' : 'low'
+    };
+  }
+
+  const bareName = executableName.replace(/^-/, '');
+  if (!isListening && (SHELL_NAMES.has(bareName) || TERMINAL_TOOL_NAMES.has(bareName))) {
+    const shell = SHELL_NAMES.has(bareName);
+    return {
+      category: 'user-app',
+      description: shell ? `${bareName} shell${process.tty ? ` in ${process.tty}` : ''}.` : `${bareName} terminal session manager.`,
+      tags: [shell ? 'shell' : 'terminal'],
+      confidence: 'high',
+      evidence: [`Executable is the ${bareName} ${shell ? 'shell' : 'terminal multiplexer'}`, ...(process.tty ? [`Attached to terminal ${process.tty}`] : [])],
+      safeToTerminate: true,
+      cleanCandidate: false,
+      riskLevel: 'low'
     };
   }
 

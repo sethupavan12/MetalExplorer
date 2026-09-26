@@ -34,11 +34,19 @@ function processDetail(process: ProcessInfo): string | undefined {
   return undefined;
 }
 
+function kindLabel(process: ProcessInfo): string {
+  if (process.tags.includes('coding-agent')) return 'Agent';
+  if (process.tags.includes('shell')) return 'Shell';
+  if (process.tags.includes('terminal')) return 'Terminal';
+  if (process.tags.includes('mcp')) return 'MCP server';
+  return CATEGORY_LABELS[process.category];
+}
+
 function KindCell({ process }: { process: ProcessInfo }): JSX.Element {
   return (
     <span className="kind-cell" title={`${process.confidence} confidence · ${process.riskLevel} risk`}>
       <StatusDot tone={RISK_TONES[process.riskLevel]} />
-      {process.tags.includes('coding-agent') ? 'Agent' : CATEGORY_LABELS[process.category]}
+      {kindLabel(process)}
     </span>
   );
 }
@@ -122,7 +130,11 @@ export function ProcessesTable({ rows, treeMode, collapsed, selectedPid, sort, o
           ) : null}
           <ProcessGlyph process={process} />
           <span className="name-text">{process.name}</span>
-          {treeMode && hasChildren && collapsed.has(process.pid) ? <span className="name-detail">{descendantCount}</span> : <span className="name-detail">{processDetail(process)}</span>}
+          {treeMode && hasChildren && collapsed.has(process.pid) ? (
+            <span className="name-detail">{descendantCount}</span>
+          ) : !treeMode || depth < 3 ? (
+            <span className="name-detail">{processDetail(process)}</span>
+          ) : null}
         </div>
       )
     },

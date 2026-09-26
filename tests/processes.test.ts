@@ -215,6 +215,11 @@ describe('classifyProcess', () => {
     expect(classifyProcess({ ...knowledge, ports: [] }).category).not.toBe('browser');
   });
 
+  it('recognises login shells and terminal multiplexers', () => {
+    expect(classifyProcess({ ...raw({ command: '-zsh', name: '-zsh', tty: 'ttys003' }), ports: [] })).toMatchObject({ tags: ['shell'], confidence: 'high' });
+    expect(classifyProcess({ ...raw({ executable: '/opt/homebrew/bin/tmux', command: 'tmux new -s work', name: 'tmux' }), ports: [] }).tags).toEqual(['terminal']);
+  });
+
   it('treats underscore system accounts as macOS system processes', () => {
     const coreaudio = raw({ user: '_coreaudiod', command: '/usr/local/bin/helper', name: 'helper' });
     expect(classifyProcess({ ...coreaudio, ports: [] }).category).toBe('macos-system');
