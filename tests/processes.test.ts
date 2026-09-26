@@ -294,6 +294,19 @@ describe('buildProcessesFromOutputs', () => {
     expect(two.processes[0].cpuPercent).toBe(50);
   });
 
+  it('falls back to the ps average after a long gap or when a pid is reused', () => {
+    const state = createSamplerState();
+    const row = (elapsed: string, cpuTime: string) => `12720 501 demo-user 7.5 1.0 1000 1000 ${elapsed} ${cpuTime} S ttys003 /opt/homebrew/bin/node server.js`;
+    const base = { lsofOutput: '', currentUser: 'demo-user', currentPid: 1, state };
+
+    buildProcessesFromOutputs({ ...base, psOutput: row('01:00', '0:10.00'), sampledAtMs: 60_000 });
+    const afterPause = buildProcessesFromOutputs({ ...base, psOutput: row('03:00', '0:20.00'), sampledAtMs: 180_000 });
+    expect(afterPause.processes[0].cpuPercent).toBe(7.5);
+
+    const reused = buildProcessesFromOutputs({ ...base, psOutput: row('00:02', '0:30.00'), sampledAtMs: 182_000 });
+    expect(reused.processes[0].cpuPercent).toBe(7.5);
+  });
+
   it('prunes per-process sampler state for exited processes', () => {
     const state = createSamplerState();
     const base = { lsofOutput: '', currentUser: 'demo-user', currentPid: 1, state, networkSamples: parseNettopOutput(nettopOutput) };

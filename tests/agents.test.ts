@@ -224,4 +224,32 @@ describe('AgentUsageReader', () => {
       turns: 1
     });
   });
+
+  it('does not borrow another session transcript when the known session file does not exist yet', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'me-claude-'));
+    const cwd = '/Users/demo/app';
+    const dir = join(home, 'projects', encodeClaudeProjectPath(cwd));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'other-session.jsonl'), `${JSON.stringify({ type: 'assistant', timestamp: '2026-09-26T10:00:00.000Z', message: { id: 'x', usage: { output_tokens: 99 } } })}\n`);
+
+    const reader = new AgentUsageReader(home, join(home, 'codex'));
+    const roots = findAgentRoots(processes()).filter((root) => root.agent.kind === 'claude');
+    const usage = await reader.readUsage(roots, new Map(), new Map([[52209, { sessionId: 'brand-new', cwd, name: null, status: 'busy' }]]), Date.now());
+    expect(usage.has('claude:52209')).toBe(false);
+  });
+
+  it('keeps multi-byte characters intact across read chunks and ignores content lines', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'me-claude-'));
+    const cwd = '/Users/demo/app';
+    const dir = join(home, 'projects', encodeClaudeProjectPath(cwd));
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 's.jsonl');
+    const content = JSON.stringify({ type: 'user', timestamp: '2026-09-26T10:00:00.000Z', gitBranch: 'feat/ünïcødé', message: { content: '"usage" 🚀'.repeat(1000) } });
+    writeFileSync(file, `${content}\n${JSON.stringify({ type: 'assistant', timestamp: '2026-09-26T10:00:05.000Z', message: { id: 'm', usage: { output_tokens: 5 } } })}\n`);
+
+    const reader = new AgentUsageReader(home, join(home, 'codex'));
+    const roots = findAgentRoots(processes()).filter((root) => root.agent.kind === 'claude');
+    const usage = await reader.readUsage(roots, new Map(), new Map([[52209, { sessionId: 's', cwd, name: null, status: null }]]), Date.now());
+    expect(usage.get('claude:52209')).toMatchObject({ outputTokens: 5, gitBranch: 'feat/ünïcødé', lastActivityAt: '2026-09-26T10:00:05.000Z' });
+  });
 });

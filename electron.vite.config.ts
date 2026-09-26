@@ -32,6 +32,7 @@ export default defineConfig({
     root: '.',
     plugins: [react()],
     build: {
+      minify: 'esbuild',
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'index.html')

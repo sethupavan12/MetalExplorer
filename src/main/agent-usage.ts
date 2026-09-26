@@ -1,6 +1,7 @@
 import { open, readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import type { AgentUsage } from '../shared/types';
 import type { AgentRoot, ClaudeSessionState } from './agents';
 import { parseClaudeSessionState } from './agents';
@@ -12,10 +13,20 @@ import { parseClaudeSessionState } from './agents';
 
 const READ_CHUNK_BYTES = 4 * 1024 * 1024;
 const CODEX_TAIL_BYTES = 512 * 1024;
+const CODEX_HEAD_MAX_BYTES = 4 * 1024 * 1024;
+const CODEX_RESCAN_MS = 30_000;
+const CODEX_MAX_DAYS = 14;
+/** Unfinished lines longer than this are dropped rather than held in memory between samples. */
+const MAX_PARTIAL_CHARS = 1024 * 1024;
 
-interface ClaudeFileCursor {
+interface LineCursor {
   offset: number;
   partial: string;
+  skipFragment: boolean;
+  decoder: StringDecoder;
+}
+
+export interface ClaudeFileCursor extends LineCursor {
   messages: Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number; reasoning: number }>;
   model: string | null;
   contextTokens: number | null;
@@ -23,10 +34,7 @@ interface ClaudeFileCursor {
   gitBranch: string | null;
 }
 
-interface CodexFileCursor {
-  offset: number;
-  partial: string;
-  skipFragment: boolean;
+export interface CodexFileCursor extends LineCursor {
   sessionId: string | null;
   cwd: string | null;
   startedAt: number | null;
@@ -35,13 +43,23 @@ interface CodexFileCursor {
   contextTokens: number | null;
   contextWindow: number | null;
   turns: number;
+  /** False when reading started from the tail, so turn counts are incomplete. */
+  complete: boolean;
   lastActivityAt: string | null;
+}
+
+interface CodexHead {
+  sessionId: string | null;
+  cwd: string | null;
+  startedAt: number | null;
 }
 
 export class AgentUsageReader {
   private readonly claudeCursors = new Map<string, ClaudeFileCursor>();
   private readonly codexCursors = new Map<string, CodexFileCursor>();
+  private readonly codexHeads = new Map<string, CodexHead>();
   private readonly codexAssignments = new Map<string, string>();
+  private readonly codexLastScan = new Map<string, number>();
 
   constructor(
     private readonly claudeHome = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'),
@@ -64,74 +82,73 @@ export class AgentUsageReader {
     return states;
   }
 
-  async readUsage(
-    roots: AgentRoot[],
-    cwdByPid: Map<number, string>,
-    claudeStates: Map<number, ClaudeSessionState>,
-    now: number
-  ): Promise<Map<string, AgentUsage>> {
+  async readUsage(roots: AgentRoot[], cwdByPid: Map<number, string>, claudeStates: Map<number, ClaudeSessionState>, now: number): Promise<Map<string, AgentUsage>> {
     const usage = new Map<string, AgentUsage>();
-    const liveCodexIds = new Set<string>();
-    const usedFiles = new Set<string>();
+
+    // Resolve every session to at most one file first, so two sessions never share (and race on) a cursor.
+    const claudeFiles = new Map<string, string>();
+    const claimed = new Set<string>();
+    const claudeRoots = roots.filter((root) => root.agent.kind === 'claude').sort((a, b) => b.process.uptimeSeconds - a.process.uptimeSeconds);
+    for (const root of claudeRoots) {
+      const state = claudeStates.get(root.process.pid);
+      const cwd = state?.cwd ?? cwdByPid.get(root.process.pid);
+      if (!cwd) continue;
+      const file = await this.resolveClaudeFile(cwd, state?.sessionId ?? null, now - root.process.uptimeSeconds * 1000, claimed).catch(() => null);
+      if (file) {
+        claimed.add(file);
+        claudeFiles.set(root.sessionId, file);
+      }
+    }
 
     await Promise.all(
-      roots.map(async (root) => {
-        const startedAt = now - root.process.uptimeSeconds * 1000;
-        if (root.agent.kind === 'claude') {
-          const state = claudeStates.get(root.process.pid);
-          const cwd = state?.cwd ?? cwdByPid.get(root.process.pid);
-          const result = cwd ? await this.readClaude(cwd, state?.sessionId ?? null, startedAt, usedFiles).catch(() => null) : null;
-          if (result) {
-            usage.set(root.sessionId, result);
-          }
-        }
-
-        if (root.agent.kind === 'codex') {
-          liveCodexIds.add(root.sessionId);
-          const cwd = cwdByPid.get(root.process.pid);
-          const result = cwd ? await this.readCodex(root.sessionId, cwd, startedAt, now).catch(() => null) : null;
-          if (result) {
-            usage.set(root.sessionId, result);
-          }
-        }
+      [...claudeFiles].map(async ([sessionId, file]) => {
+        const result = await this.readClaude(file).catch(() => null);
+        if (result) usage.set(sessionId, result);
       })
     );
 
-    for (const id of this.codexAssignments.keys()) {
+    const liveCodexIds = new Set<string>();
+    for (const root of roots.filter((candidate) => candidate.agent.kind === 'codex')) {
+      liveCodexIds.add(root.sessionId);
+      const cwd = cwdByPid.get(root.process.pid);
+      const result = cwd ? await this.readCodex(root.sessionId, cwd, now - root.process.uptimeSeconds * 1000, now).catch(() => null) : null;
+      if (result) usage.set(root.sessionId, result);
+    }
+
+    this.prune(new Set(claudeFiles.values()), liveCodexIds);
+    return usage;
+  }
+
+  private prune(claudeFiles: Set<string>, liveCodexIds: Set<string>): void {
+    for (const file of this.claudeCursors.keys()) {
+      if (!claudeFiles.has(file)) this.claudeCursors.delete(file);
+    }
+    for (const id of [...this.codexAssignments.keys(), ...this.codexLastScan.keys()]) {
       if (!liveCodexIds.has(id)) {
         this.codexAssignments.delete(id);
-      }
-    }
-    for (const file of this.claudeCursors.keys()) {
-      if (!usedFiles.has(file)) {
-        this.claudeCursors.delete(file);
+        this.codexLastScan.delete(id);
       }
     }
     const assigned = new Set(this.codexAssignments.values());
     for (const file of this.codexCursors.keys()) {
-      if (!assigned.has(file)) {
-        this.codexCursors.delete(file);
-      }
+      if (!assigned.has(file)) this.codexCursors.delete(file);
     }
-
-    return usage;
   }
 
-  private async readClaude(cwd: string, sessionId: string | null, startedAt: number, usedFiles: Set<string>): Promise<AgentUsage | null> {
+  private async resolveClaudeFile(cwd: string, sessionId: string | null, startedAt: number, claimed: Set<string>): Promise<string | null> {
     const projectDir = join(this.claudeHome, 'projects', encodeClaudeProjectPath(cwd));
-    let file = sessionId ? join(projectDir, `${sessionId}.jsonl`) : null;
-
-    if (!file || !(await stat(file).catch(() => null))) {
-      file = await newestFile(projectDir, '.jsonl', startedAt - 5000);
+    if (sessionId) {
+      // A known session id is authoritative. If its transcript does not exist yet, report nothing rather than
+      // borrowing another session's numbers from the same folder.
+      const file = join(projectDir, `${sessionId}.jsonl`);
+      return (await stat(file).catch(() => null)) ? file : null;
     }
-    if (!file) {
-      return null;
-    }
+    return newestFile(projectDir, '.jsonl', startedAt - 5000, claimed);
+  }
 
-    usedFiles.add(file);
+  private async readClaude(file: string): Promise<AgentUsage | null> {
     const cursor = this.claudeCursors.get(file) ?? {
-      offset: 0,
-      partial: '',
+      ...newLineCursor(),
       messages: new Map(),
       model: null,
       contextTokens: null,
@@ -139,7 +156,6 @@ export class AgentUsageReader {
       gitBranch: null
     };
     this.claudeCursors.set(file, cursor);
-
     await readAppended(file, cursor, (line) => applyClaudeLine(cursor, line));
 
     let input = 0;
@@ -176,35 +192,22 @@ export class AgentUsageReader {
   private async readCodex(sessionKey: string, cwd: string, startedAt: number, now: number): Promise<AgentUsage | null> {
     let file = this.codexAssignments.get(sessionKey) ?? null;
 
-    if (!file) {
-      const claimed = new Set(this.codexAssignments.values());
-      const candidates = await this.codexCandidates(startedAt, now);
-      let best: { path: string; distance: number } | null = null;
-      for (const candidate of candidates) {
-        if (claimed.has(candidate)) {
-          continue;
-        }
-        const cursor = await this.codexCursor(candidate);
-        if (cursor.cwd !== cwd) {
-          continue;
-        }
-        const distance = Math.abs((cursor.startedAt ?? now) - startedAt);
-        if (!best || distance < best.distance) {
-          best = { path: candidate, distance };
-        }
-      }
-      file = best?.path ?? null;
-      if (file) {
-        this.codexAssignments.set(sessionKey, file);
-      }
+    if (!file && now - (this.codexLastScan.get(sessionKey) ?? 0) >= CODEX_RESCAN_MS) {
+      this.codexLastScan.set(sessionKey, now);
+      file = await this.matchCodexRollout(cwd, startedAt, now);
+      if (file) this.codexAssignments.set(sessionKey, file);
     }
-
     if (!file) {
       return null;
     }
 
     const cursor = await this.codexCursor(file);
     await readAppended(file, cursor, (line) => applyCodexLine(cursor, line));
+    if (!cursor.totals && !cursor.complete) {
+      // The tail had no token count yet; replay the whole file once.
+      Object.assign(cursor, newLineCursor(), { turns: 0, complete: true });
+      await readAppended(file, cursor, (line) => applyCodexLine(cursor, line));
+    }
     const totals = cursor.totals;
 
     return {
@@ -219,55 +222,58 @@ export class AgentUsageReader {
       totalTokens: totals?.total ?? 0,
       contextTokens: cursor.contextTokens,
       contextWindow: cursor.contextWindow,
-      turns: cursor.turns,
+      turns: cursor.complete ? cursor.turns : null,
       lastActivityAt: cursor.lastActivityAt,
       gitBranch: null
     };
   }
 
+  /** Picks the unclaimed rollout in this folder that started closest to (and not long before) the process. */
+  private async matchCodexRollout(cwd: string, startedAt: number, now: number): Promise<string | null> {
+    const claimed = new Set(this.codexAssignments.values());
+    let best: { path: string; distance: number } | null = null;
+    for (const candidate of await this.codexCandidates(startedAt, now)) {
+      if (claimed.has(candidate)) continue;
+      const head = await this.codexHead(candidate);
+      if (!head || head.cwd !== cwd) continue;
+      const distance = Math.abs((head.startedAt ?? now) - startedAt);
+      if (!best || distance < best.distance) best = { path: candidate, distance };
+    }
+    return best?.path ?? null;
+  }
+
+  private async codexHead(path: string): Promise<CodexHead | null> {
+    const cached = this.codexHeads.get(path);
+    if (cached) return cached;
+
+    const firstLine = await readFirstLine(path, CODEX_HEAD_MAX_BYTES).catch(() => null);
+    if (firstLine === null) return null;
+    const probe = { ...newCodexCursor() };
+    applyCodexLine(probe, firstLine);
+    const head = { sessionId: probe.sessionId, cwd: probe.cwd, startedAt: probe.startedAt };
+    this.codexHeads.set(path, head);
+    return head;
+  }
+
   private async codexCursor(path: string): Promise<CodexFileCursor> {
     const existing = this.codexCursors.get(path);
-    if (existing) {
-      return existing;
-    }
+    if (existing) return existing;
 
-    const cursor: CodexFileCursor = {
-      offset: 0,
-      partial: '',
-      skipFragment: false,
-      sessionId: null,
-      cwd: null,
-      startedAt: null,
-      model: null,
-      totals: null,
-      contextTokens: null,
-      contextWindow: null,
-      turns: 0,
-      lastActivityAt: null
-    };
+    const head = await this.codexHead(path);
+    const info = await stat(path);
+    const cursor: CodexFileCursor = { ...newCodexCursor(), ...(head ?? {}) };
+    // Totals are cumulative, so start near the end of large rollouts instead of replaying them.
+    cursor.offset = Math.max(0, info.size - CODEX_TAIL_BYTES);
+    cursor.skipFragment = cursor.offset > 0;
+    cursor.complete = cursor.offset === 0;
     this.codexCursors.set(path, cursor);
-
-    const handle = await open(path, 'r');
-    try {
-      const info = await handle.stat();
-      const head = Buffer.alloc(Math.min(info.size, 64 * 1024));
-      await handle.read(head, 0, head.length, 0);
-      const firstLine = head.toString('utf8').split('\n')[0];
-      applyCodexLine(cursor, firstLine);
-      // Totals are cumulative, so start near the end of large rollouts instead of replaying them.
-      cursor.offset = Math.max(0, info.size - CODEX_TAIL_BYTES);
-      cursor.partial = '';
-      cursor.skipFragment = cursor.offset > 0;
-    } finally {
-      await handle.close();
-    }
-
     return cursor;
   }
 
   private async codexCandidates(startedAt: number, now: number): Promise<string[]> {
     const days = new Set<string>();
-    for (let time = startedAt - 86_400_000; time <= now + 86_400_000; time += 86_400_000) {
+    const from = Math.max(startedAt - 86_400_000, now - CODEX_MAX_DAYS * 86_400_000);
+    for (let time = from; time <= now + 86_400_000; time += 86_400_000) {
       const date = new Date(time);
       days.add(join(String(date.getFullYear()), pad(date.getMonth() + 1), pad(date.getDate())));
     }
@@ -275,17 +281,18 @@ export class AgentUsageReader {
     const files: string[] = [];
     for (const day of days) {
       const dir = join(this.codexHome, 'sessions', day);
-      const entries = await readdir(dir).catch(() => []);
-      for (const entry of entries) {
-        if (!entry.startsWith('rollout-') || !entry.endsWith('.jsonl')) {
-          continue;
-        }
+      for (const entry of await readdir(dir).catch(() => [] as string[])) {
+        if (!entry.startsWith('rollout-') || !entry.endsWith('.jsonl')) continue;
         const path = join(dir, entry);
         const info = await stat(path).catch(() => null);
-        if (info && info.mtimeMs >= startedAt - 5000) {
-          files.push(path);
-        }
+        if (info && info.mtimeMs >= startedAt - 5000) files.push(path);
       }
+    }
+
+    // Heads are immutable, but only keep the ones that can still match.
+    const live = new Set(files);
+    for (const path of this.codexHeads.keys()) {
+      if (!live.has(path)) this.codexHeads.delete(path);
     }
     return files;
   }
@@ -295,8 +302,16 @@ export function encodeClaudeProjectPath(cwd: string): string {
   return cwd.replace(/[^a-zA-Z0-9]/g, '-');
 }
 
+/**
+ * Applies one transcript line. Only assistant lines with usage are fully parsed; timestamps and branch names on other
+ * lines come from a cheap match on top-level keys, so large tool outputs are never JSON-parsed.
+ */
 export function applyClaudeLine(cursor: ClaudeFileCursor, line: string): void {
-  if (!line.includes('"timestamp"')) {
+  if (!line.includes('"usage"') || !line.includes('"assistant"')) {
+    const timestamp = line.match(/"timestamp":"([^"]{10,40})"/)?.[1];
+    if (timestamp) cursor.lastActivityAt = timestamp;
+    const branch = line.match(/"gitBranch":"([^"]{1,120})"/)?.[1];
+    if (branch) cursor.gitBranch = branch;
     return;
   }
 
@@ -332,6 +347,7 @@ export function applyClaudeLine(cursor: ClaudeFileCursor, line: string): void {
   const cacheRead = numberField(usage.cache_read_input_tokens);
   const cacheWrite = numberField(usage.cache_creation_input_tokens);
   const details = usage.output_tokens_details as Record<string, unknown> | undefined;
+  // Streaming writes several lines per message; keep the latest usage for each message id.
   cursor.messages.set(entry.message.id, {
     input,
     output: numberField(usage.output_tokens),
@@ -397,11 +413,31 @@ export function applyCodexLine(cursor: CodexFileCursor, line: string): void {
   }
 }
 
-async function readAppended(path: string, cursor: { offset: number; partial: string; skipFragment?: boolean }, onLine: (line: string) => void): Promise<void> {
+function newLineCursor(): LineCursor {
+  return { offset: 0, partial: '', skipFragment: false, decoder: new StringDecoder('utf8') };
+}
+
+function newCodexCursor(): CodexFileCursor {
+  return {
+    ...newLineCursor(),
+    sessionId: null,
+    cwd: null,
+    startedAt: null,
+    model: null,
+    totals: null,
+    contextTokens: null,
+    contextWindow: null,
+    turns: 0,
+    complete: true,
+    lastActivityAt: null
+  };
+}
+
+async function readAppended(path: string, cursor: LineCursor, onLine: (line: string) => void): Promise<void> {
   const info = await stat(path);
   if (info.size < cursor.offset) {
-    cursor.offset = 0;
-    cursor.partial = '';
+    // The file was truncated or replaced; start over.
+    Object.assign(cursor, newLineCursor());
   }
   if (info.size === cursor.offset) {
     return;
@@ -417,13 +453,17 @@ async function readAppended(path: string, cursor: { offset: number; partial: str
         break;
       }
       cursor.offset += bytesRead;
-      const text = cursor.partial + buffer.toString('utf8', 0, bytesRead);
-      const lines = text.split('\n');
+      // The decoder keeps multi-byte characters that straddle chunk boundaries intact.
+      const lines = (cursor.partial + cursor.decoder.write(buffer.subarray(0, bytesRead))).split('\n');
       cursor.partial = lines.pop() ?? '';
-      // When reading starts mid-file the first line is a fragment of an earlier record.
+      // When reading starts mid-line, the first piece is a fragment of an earlier record.
       if (cursor.skipFragment && lines.length) {
         lines.shift();
         cursor.skipFragment = false;
+      }
+      if (cursor.partial.length > MAX_PARTIAL_CHARS) {
+        cursor.partial = '';
+        cursor.skipFragment = true;
       }
       for (const line of lines) {
         onLine(line);
@@ -434,14 +474,34 @@ async function readAppended(path: string, cursor: { offset: number; partial: str
   }
 }
 
-async function newestFile(dir: string, extension: string, minMtimeMs: number): Promise<string | null> {
-  const entries = await readdir(dir).catch(() => []);
+async function readFirstLine(path: string, maxBytes: number): Promise<string> {
+  const handle = await open(path, 'r');
+  try {
+    const decoder = new StringDecoder('utf8');
+    let text = '';
+    let position = 0;
+    while (position < maxBytes) {
+      const buffer = Buffer.alloc(64 * 1024);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+      if (!bytesRead) break;
+      position += bytesRead;
+      text += decoder.write(buffer.subarray(0, bytesRead));
+      const newline = text.indexOf('\n');
+      if (newline >= 0) return text.slice(0, newline);
+    }
+    return text;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function newestFile(dir: string, extension: string, minMtimeMs: number, exclude: Set<string>): Promise<string | null> {
+  const entries = await readdir(dir).catch(() => [] as string[]);
   let best: { path: string; mtime: number } | null = null;
   for (const entry of entries) {
-    if (!entry.endsWith(extension)) {
-      continue;
-    }
+    if (!entry.endsWith(extension)) continue;
     const path = join(dir, entry);
+    if (exclude.has(path)) continue;
     const info = await stat(path).catch(() => null);
     if (info && info.mtimeMs >= minMtimeMs && (!best || info.mtimeMs > best.mtime)) {
       best = { path, mtime: info.mtimeMs };

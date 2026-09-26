@@ -1,29 +1,39 @@
 import { OctagonAlert } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import type { JSX } from 'react';
-import type { AgentSession, ProcessInfo } from '../../shared/types';
+import type { AgentSession, ProcessInfo, TerminateTarget } from '../../shared/types';
 import { formatKb, formatPercent, pluralize } from '../lib/format';
 import { cleanupReason, portsText, reviewReason } from '../lib/model';
 import { Button, ProcessGlyph } from './ui';
 
+/** A frozen copy of what the user is reviewing. The sheet never re-reads live data while open. */
 export interface StopRequest {
-  pids: number[];
+  targets: ProcessInfo[];
+  sampledAt: string;
   session?: AgentSession;
   source: 'process' | 'cleanup' | 'agent';
 }
 
+export function stopTargets(request: StopRequest): TerminateTarget[] {
+  const sampledSeconds = Math.round(Date.parse(request.sampledAt) / 1000);
+  return request.targets
+    .filter((process) => process.safeToTerminate)
+    .map((process) => ({ pid: process.pid, startedAt: sampledSeconds - process.uptimeSeconds, command: process.command }));
+}
+
 interface StopSheetProps {
   request: StopRequest;
-  processes: Map<number, ProcessInfo>;
   busy: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }
 
 /** Modal review sheet. Nothing is stopped until the destructive button is pressed. */
-export function StopSheet({ request, processes, busy, onCancel, onConfirm }: StopSheetProps): JSX.Element {
+export function StopSheet({ request, busy, onCancel, onConfirm }: StopSheetProps): JSX.Element {
   const cancelRef = useRef<HTMLButtonElement>(null);
-  const targets = request.pids.map((pid) => processes.get(pid)).filter((process): process is ProcessInfo => Boolean(process));
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
+  const targets = request.targets;
   const stoppable = targets.filter((process) => process.safeToTerminate);
   const session = request.session;
   // A session stop ends the whole tree, so report the tree's footprint rather than the root process alone.
@@ -32,14 +42,15 @@ export function StopSheet({ request, processes, busy, onCancel, onConfirm }: Sto
   const ports = session ? session.ports : stoppable.flatMap((process) => process.ports);
   const connections = session ? session.connectionCount : stoppable.reduce((total, process) => total + process.networkConnections.length, 0);
 
+  // Focus Cancel once when the sheet opens; later renders must not steal focus from the Stop button.
   useEffect(() => {
     cancelRef.current?.focus();
     const handle = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onCancel();
+      if (event.key === 'Escape') onCancelRef.current();
     };
     window.addEventListener('keydown', handle);
     return () => window.removeEventListener('keydown', handle);
-  }, [onCancel]);
+  }, []);
 
   const title = session
     ? `Stop ${session.label} session “${session.title ?? session.projectName}”?`

@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { cpus, loadavg, totalmem, userInfo } from 'node:os';
 import { promisify } from 'node:util';
-import type { AgentSession, ProcessHistory, ProcessInfo, ProcessSnapshot, SystemSample, SystemStats, TerminateResult } from '../shared/types';
+import type { AgentSession, ProcessHistory, ProcessInfo, ProcessSnapshot, SystemSample, SystemStats, TerminateResult, TerminateTarget } from '../shared/types';
 import { AgentUsageReader } from './agent-usage';
 import { buildAgentSessions, createAgentTrackerState, findAgentRoots, parseLsofCwdOutput, type ClaudeSessionState } from './agents';
 import {
@@ -12,7 +12,8 @@ import {
   createSamplerState,
   isProtectedProcess,
   parseElapsedToSeconds,
-  parseNettopOutput
+  parseNettopOutput,
+  processStartKey
 } from './processes';
 import { parsePressureLevel, parseSwapUsage, parseVmStat } from './system';
 
@@ -39,7 +40,7 @@ export class Sampler {
   private readonly agentState = createAgentTrackerState();
   private readonly usageReader = new AgentUsageReader();
   private readonly systemHistory: SystemSample[] = [];
-  private readonly processHistory = new Map<number, Array<{ t: number; cpu: number; rssKb: number }>>();
+  private readonly processHistory = new Map<number, { startKey: string; samples: Array<{ t: number; cpu: number; rssKb: number }> }>();
   private readonly cwdCache = new Map<number, { cwd: string; at: number }>();
   private readonly currentUser = userInfo().username;
   private readonly cpuCores = cpus().length || 1;
@@ -67,7 +68,7 @@ export class Sampler {
   }
 
   history(pid: number): ProcessHistory {
-    return { pid, samples: [...(this.processHistory.get(pid) ?? [])] };
+    return { pid, samples: [...(this.processHistory.get(pid)?.samples ?? [])] };
   }
 
   findProcess(pid: number): ProcessInfo | null {
@@ -78,41 +79,33 @@ export class Sampler {
     return this.lastSnapshot?.agents.find((session) => session.id === sessionId) ?? null;
   }
 
-  async terminate(pids: number[]): Promise<TerminateResult[]> {
-    const unique = [...new Set(pids)].filter((pid) => Number.isInteger(pid));
+  async terminate(targets: TerminateTarget[]): Promise<TerminateResult[]> {
+    const unique = [...new Map(targets.map((target) => [target.pid, target])).values()];
     if (!unique.length) {
       return [];
     }
 
     const known = new Map((this.lastSnapshot?.processes ?? []).map((process) => [process.pid, process]));
-    const current = parseIdentity(await run('/bin/ps', ['-o', 'pid=,user=,etime=,args=', '-p', unique.join(',')]));
+    const current = parseIdentity(await run('/bin/ps', ['-o', 'pid=,user=,etime=,args=', '-p', unique.map((target) => target.pid).join(',')]));
+    const nowSeconds = Math.round(Date.now() / 1000);
 
-    const results = unique.map((pid): TerminateResult => {
-      const reviewed = known.get(pid);
-      const live = current.get(pid);
-
-      if (pid <= 1) {
-        return { ok: false, pid, message: 'Protected process cannot be stopped.' };
-      }
-      if (!reviewed) {
-        return { ok: false, pid, message: `PID ${pid} was not in the reviewed process list. Refresh and try again.` };
-      }
-      if (!live) {
-        return { ok: false, pid, message: `${reviewed.name} (${pid}) is no longer running.` };
-      }
-      // Guard against PID reuse: the process must still be the one the user reviewed.
-      if (live.command !== reviewed.command || live.user !== reviewed.user || live.uptimeSeconds + 5 < reviewed.uptimeSeconds) {
-        return { ok: false, pid, message: `PID ${pid} now belongs to a different process. Nothing was stopped.` };
-      }
-      if (!reviewed.safeToTerminate || live.user !== this.currentUser || isProtectedProcess(live, process.pid)) {
-        return { ok: false, pid, message: `${reviewed.name} is protected or not owned by ${this.currentUser}.` };
+    const results = unique.map((target): TerminateResult => {
+      const reviewedProcess = known.get(target.pid);
+      const decision = evaluateTermination(target, reviewedProcess ?? null, current.get(target.pid) ?? null, {
+        currentUser: this.currentUser,
+        selfPid: process.pid,
+        nowSeconds,
+        sampledAtSeconds: this.lastSnapshot ? Math.round(Date.parse(this.lastSnapshot.generatedAt) / 1000) : nowSeconds
+      });
+      if (!decision.allowed) {
+        return { ok: false, pid: target.pid, message: decision.message };
       }
 
       try {
-        process.kill(pid, 'SIGTERM');
-        return { ok: true, pid, message: `Sent SIGTERM to ${reviewed.name} (${pid}).` };
+        process.kill(target.pid, 'SIGTERM');
+        return { ok: true, pid: target.pid, message: `Sent SIGTERM to ${reviewedProcess?.name ?? 'process'} (${target.pid}).` };
       } catch (error) {
-        return { ok: false, pid, message: error instanceof Error ? error.message : 'Unknown termination error.' };
+        return { ok: false, pid: target.pid, message: error instanceof Error ? error.message : 'Unknown termination error.' };
       }
     });
 
@@ -213,12 +206,15 @@ export class Sampler {
     const alive = new Set<number>();
     for (const process of processes) {
       alive.add(process.pid);
-      const samples = this.processHistory.get(process.pid) ?? [];
-      samples.push({ t, cpu: process.cpuPercent, rssKb: process.rssKb });
-      if (samples.length > PROCESS_HISTORY_LENGTH) {
-        samples.shift();
+      const startKey = processStartKey(process, t);
+      const existing = this.processHistory.get(process.pid);
+      // A reused pid starts a fresh chart instead of inheriting the previous process's history.
+      const entry = existing && Math.abs(Number(existing.startKey) - Number(startKey)) <= 2 ? existing : { startKey, samples: [] };
+      entry.samples.push({ t, cpu: process.cpuPercent, rssKb: process.rssKb });
+      if (entry.samples.length > PROCESS_HISTORY_LENGTH) {
+        entry.samples.shift();
       }
-      this.processHistory.set(process.pid, samples);
+      this.processHistory.set(process.pid, entry);
     }
     for (const pid of this.processHistory.keys()) {
       if (!alive.has(pid)) {
@@ -255,6 +251,51 @@ export class Sampler {
       history: [...this.systemHistory]
     };
   }
+}
+
+const START_TOLERANCE_SECONDS = 3;
+
+interface LiveIdentity {
+  pid: number;
+  user: string;
+  uptimeSeconds: number;
+  command: string;
+}
+
+/**
+ * Decides whether a stop is allowed. The live process, the latest sample, and the identity the user approved in the
+ * review sheet must all describe the same process, so a PID reused while the sheet was open is never signalled.
+ */
+export function evaluateTermination(
+  target: TerminateTarget,
+  reviewed: ProcessInfo | null,
+  live: LiveIdentity | null,
+  context: { currentUser: string; selfPid: number; nowSeconds: number; sampledAtSeconds: number }
+): { allowed: boolean; message: string } {
+  const name = reviewed?.name ?? `PID ${target.pid}`;
+  if (!Number.isInteger(target.pid) || target.pid <= 1) {
+    return { allowed: false, message: 'Protected process cannot be stopped.' };
+  }
+  if (!live) {
+    return { allowed: false, message: `${name} (${target.pid}) is no longer running.` };
+  }
+
+  const liveStart = context.nowSeconds - live.uptimeSeconds;
+  const sameAsApproved = live.command === target.command && Math.abs(liveStart - target.startedAt) <= START_TOLERANCE_SECONDS;
+  if (!sameAsApproved) {
+    return { allowed: false, message: `PID ${target.pid} now belongs to a different process. Nothing was stopped.` };
+  }
+
+  const reviewedStart = reviewed ? context.sampledAtSeconds - reviewed.uptimeSeconds : Number.NaN;
+  if (!reviewed || reviewed.command !== target.command || Math.abs(reviewedStart - target.startedAt) > START_TOLERANCE_SECONDS) {
+    return { allowed: false, message: `${name} (${target.pid}) changed since you reviewed it. Refresh and try again.` };
+  }
+
+  if (!reviewed.safeToTerminate || live.user !== context.currentUser || isProtectedProcess(live, context.selfPid)) {
+    return { allowed: false, message: `${name} is protected or not owned by ${context.currentUser}.` };
+  }
+
+  return { allowed: true, message: '' };
 }
 
 export function parseIdentity(output: string): Map<number, { pid: number; user: string; uptimeSeconds: number; command: string }> {

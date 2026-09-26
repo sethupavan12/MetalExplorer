@@ -22,7 +22,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import type { JSX } from 'react';
 import type { AgentSession, AiExplanation, AppSettings, MenuCommand, ProcessInfo, ProcessSnapshot, SettingsUpdate } from '../shared/types';
 import { CommandPalette, type PaletteItem } from './components/CommandPalette';
-import { StopSheet, type StopRequest } from './components/StopSheet';
+import { StopSheet, stopTargets, type StopRequest } from './components/StopSheet';
 import { AgentMonogram, EmptyState, IconButton, ProcessGlyph, Property, PropertyList, Section, Segmented } from './components/ui';
 import { formatClock, formatPercent, pluralize } from './lib/format';
 import {
@@ -277,19 +277,33 @@ export function App(): JSX.Element {
     [notify]
   );
 
-  const requestStop = useCallback((process: ProcessInfo | null) => {
-    if (process?.safeToTerminate) setStopRequest({ pids: [process.pid], source: 'process' });
-  }, []);
+  const openStopSheet = useCallback(
+    (pids: number[], source: StopRequest['source'], session?: AgentSession) => {
+      const targets = pids.map((pid) => processByPid.get(pid)).filter((process): process is ProcessInfo => Boolean(process));
+      if (snapshot && targets.length) setStopRequest({ targets, sampledAt: snapshot.generatedAt, session, source });
+    },
+    [processByPid, snapshot]
+  );
 
-  const requestStopAgent = useCallback((session: AgentSession | null) => {
-    if (session?.safeToTerminate) setStopRequest({ pids: [session.rootPid], session, source: 'agent' });
-  }, []);
+  const requestStop = useCallback(
+    (process: ProcessInfo | null) => {
+      if (process?.safeToTerminate) openStopSheet([process.pid], 'process');
+    },
+    [openStopSheet]
+  );
+
+  const requestStopAgent = useCallback(
+    (session: AgentSession | null) => {
+      if (session?.safeToTerminate) openStopSheet([session.rootPid], 'agent', session);
+    },
+    [openStopSheet]
+  );
 
   async function confirmStop(): Promise<void> {
     if (!stopRequest) return;
     setStopping(true);
     try {
-      const results = await api.terminateProcesses(stopRequest.pids);
+      const results = await api.terminateProcesses(stopTargets(stopRequest));
       const stopped = results.filter((result) => result.ok);
       const failed = results.filter((result) => !result.ok);
       if (failed.length && !stopped.length) {
@@ -367,9 +381,9 @@ export function App(): JSX.Element {
 
   const stopSelected = useCallback(() => {
     if (view === 'agents') requestStopAgent(selectedAgent);
-    else if (view === 'cleanup' && cleanupChecked.size) setStopRequest({ pids: [...cleanupChecked], source: 'cleanup' });
+    else if (view === 'cleanup' && cleanupChecked.size) openStopSheet([...cleanupChecked], 'cleanup');
     else requestStop(inspectedProcess);
-  }, [cleanupChecked, inspectedProcess, requestStop, requestStopAgent, selectedAgent, view]);
+  }, [cleanupChecked, inspectedProcess, openStopSheet, requestStop, requestStopAgent, selectedAgent, view]);
 
   const handleCommand = useCallback(
     (command: MenuCommand) => {
@@ -427,6 +441,8 @@ export function App(): JSX.Element {
   }, [paletteOpen, stopRequest]);
 
   const paletteItems = useMemo<PaletteItem[]>(() => {
+    // Built only while the palette is open; hundreds of rows otherwise rebuild on every sample.
+    if (!paletteOpen) return [];
     const items: PaletteItem[] = VIEW_IDS.map((id) => ({
       id: `view-${id}`,
       group: 'Go to',
@@ -471,7 +487,7 @@ export function App(): JSX.Element {
       });
     }
     return items;
-  }, [agents, inspectedProcess, inspectorOpen, navigate, processes, refresh, requestStop, selectAgent, selectProcess, setInspectorOpen, setTreeMode, settings, treeMode, updateSettings, view]);
+  }, [agents, inspectedProcess, inspectorOpen, navigate, paletteOpen, processes, refresh, requestStop, selectAgent, selectProcess, setInspectorOpen, setTreeMode, settings, treeMode, updateSettings, view]);
 
   const counts: Partial<Record<ViewId, number>> = snapshot
     ? {
@@ -658,7 +674,7 @@ export function App(): JSX.Element {
                 })
               }
               onToggleAll={() => setCleanupChecked((current) => (current.size === cleanupRows.length ? new Set() : new Set(cleanupRows.map((process) => process.pid))))}
-              onReview={() => setStopRequest({ pids: [...cleanupChecked], source: 'cleanup' })}
+              onReview={() => openStopSheet([...cleanupChecked], 'cleanup')}
             />
           ) : settings ? (
             <SettingsView settings={settings} rules={rules} onUpdate={updateSettings} onRulesChange={setRules} onResetRules={() => setRules(DEFAULT_RULES)} />
@@ -706,7 +722,7 @@ export function App(): JSX.Element {
         </aside>
       ) : null}
 
-      {stopRequest ? <StopSheet request={stopRequest} processes={processByPid} busy={stopping} onCancel={() => setStopRequest(null)} onConfirm={() => void confirmStop()} /> : null}
+      {stopRequest ? <StopSheet request={stopRequest} busy={stopping} onCancel={() => setStopRequest(null)} onConfirm={() => void confirmStop()} /> : null}
       {paletteOpen ? <CommandPalette items={paletteItems} onClose={() => setPaletteOpen(false)} /> : null}
       {toast ? (
         <div key={toast.id} className={`toast tone-${toast.tone}`} role="status">

@@ -268,9 +268,12 @@ export function flattenProcessTree(processes: ProcessInfo[], sort: SortState, co
   return rows;
 }
 
-export function localUrl(process: ProcessInfo, port = process.ports[0]): string | null {
-  if (!port) return null;
-  const host = port.address === '*' || port.address === '0.0.0.0' || port.address === '::' ? 'localhost' : port.address.includes(':') ? `[${port.address}]` : port.address;
+const LOOPBACK_OR_ANY = new Set(['*', '0.0.0.0', '::', '127.0.0.1', '::1', 'localhost']);
+
+/** A URL the app is allowed to open, or null for ports bound only to another interface (for example a LAN address). */
+export function localUrl(process: Pick<ProcessInfo, 'ports'>, port = process.ports[0]): string | null {
+  if (!port || !LOOPBACK_OR_ANY.has(port.address)) return null;
+  const host = port.address === '::1' ? '[::1]' : port.address === '127.0.0.1' ? '127.0.0.1' : 'localhost';
   return `http://${host}:${port.port}`;
 }
 

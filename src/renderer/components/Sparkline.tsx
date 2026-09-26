@@ -16,7 +16,8 @@ interface SparklineProps {
 
 export function Sparkline({ values, secondary, max, height = 32, capacity, tone = 'accent', secondaryTone = 'purple', className = '', label }: SparklineProps): JSX.Element {
   const id = useId().replace(/:/g, '');
-  const slots = Math.max(capacity ?? values.length, values.length, 2);
+  // Right-aligned like Activity Monitor, but a short history spans at least a third of the chart so it reads as a trend.
+  const slots = Math.max(values.length, 2, Math.min(capacity ?? values.length, Math.max(20, values.length * 3)));
   const peak = Math.max(max ?? 0, ...values, ...(secondary ?? []), 1e-9);
   const width = 100;
 

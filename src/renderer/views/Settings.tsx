@@ -129,8 +129,8 @@ export function SettingsView({ settings, rules, onUpdate, onRulesChange, onReset
               ) : null}
             </form>
           </SettingsRow>
-          <SettingsRow label="Remember key" detail={settings.encryptionAvailable ? 'Encrypted with your macOS keychain-backed storage.' : 'Encrypted storage is unavailable on this Mac.'}>
-            <Switch label="Remember key" checked={settings.rememberApiKey} disabled={!settings.encryptionAvailable} onChange={(value) => void onUpdate({ rememberApiKey: value })} />
+          <SettingsRow label="Remember key" detail={settings.encryptionAvailable === false ? 'Encrypted storage is unavailable on this Mac.' : 'Encrypted with macOS Keychain-backed storage. macOS may ask for access.'}>
+            <Switch label="Remember key" checked={settings.rememberApiKey} disabled={settings.encryptionAvailable === false} onChange={(value) => void onUpdate({ rememberApiKey: value })} />
           </SettingsRow>
         </SettingsGroup>
 

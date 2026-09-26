@@ -543,7 +543,7 @@ contextBridge.exposeInMainWorld('metalExplorer', {
       rssKb: (byPid.get(pid)?.rssKb || 1000) * (0.9 + Math.sin(index / 9) * 0.05)
     }))
   }),
-  terminateProcesses: async (pids) => pids.map((pid) => ({ ok: true, pid, message: `Mock SIGTERM sent to ${pid}.` })),
+  terminateProcesses: async (targets) => targets.map((target) => ({ ok: true, pid: target.pid, message: `Mock SIGTERM sent to ${target.pid}.` })),
   openExternal: async () => undefined,
   revealAgentFolder: async () => true,
   focusAgentHost: async () => true,

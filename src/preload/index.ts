@@ -6,7 +6,7 @@ const api: MetalExplorerApi = {
   vibrancy: process.platform === 'darwin',
   listProcesses: () => ipcRenderer.invoke('processes:list'),
   getProcessHistory: (pid) => ipcRenderer.invoke('processes:history', pid),
-  terminateProcesses: (pids) => ipcRenderer.invoke('processes:terminate', pids),
+  terminateProcesses: (targets) => ipcRenderer.invoke('processes:terminate', targets),
   openExternal: (url) => ipcRenderer.invoke('external:open', url),
   revealAgentFolder: (sessionId) => ipcRenderer.invoke('agents:reveal', sessionId),
   focusAgentHost: (sessionId) => ipcRenderer.invoke('agents:focus', sessionId),
@@ -18,6 +18,7 @@ const api: MetalExplorerApi = {
   onMenuCommand: (listener) => {
     const handler = (_event: IpcRendererEvent, command: MenuCommand): void => listener(command);
     ipcRenderer.on('menu:command', handler);
+    ipcRenderer.send('menu:ready');
     return () => {
       ipcRenderer.removeListener('menu:command', handler);
     };

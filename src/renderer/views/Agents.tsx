@@ -6,7 +6,7 @@ import { DataTable, type Column } from '../components/DataTable';
 import { Sparkline } from '../components/Sparkline';
 import { AgentMonogram, Button, EmptyState, Meter, Property, PropertyList, Section, Segmented } from '../components/ui';
 import { formatBytes, formatCpuTime, formatDuration, formatPercent, formatRate, formatRelativeTime, formatTokens, pluralize, compactPath } from '../lib/format';
-import { AGENT_COLORS, agentResumeCommand, agentTotals } from '../lib/model';
+import { AGENT_COLORS, agentResumeCommand, agentTotals, localUrl } from '../lib/model';
 import { AgentStatus } from './Overview';
 
 export type AgentStatusFilter = 'all' | 'working' | 'waiting' | 'idle';
@@ -245,8 +245,8 @@ export function AgentInspector({ session, settings, onFocusHost, onReveal, onCop
                 <span>output</span>
               </div>
               <div>
-                <strong className="mono">{usage.turns}</strong>
-                <span>{usage.source === 'codex-rollout' ? 'turns' : 'responses'}</span>
+                <strong className="mono">{usage.turns ?? formatTokens(usage.reasoningTokens)}</strong>
+                <span>{usage.turns === null ? 'reasoning' : usage.source === 'codex-rollout' ? 'turns' : 'responses'}</span>
               </div>
             </div>
             {usage.contextTokens !== null ? (
@@ -329,10 +329,9 @@ export function AgentInspector({ session, settings, onFocusHost, onReveal, onCop
         <Section title="Servers started">
           <div className="port-list">
             {session.ports.map((port) => {
-              const host = port.address === '*' || port.address === '0.0.0.0' || port.address === '::' ? 'localhost' : port.address.includes(':') ? `[${port.address}]` : port.address;
-              const url = `http://${host}:${port.port}`;
+              const url = localUrl({ ports: [port] });
               return (
-                <button type="button" key={port.port} className="port-row" onClick={() => onOpenUrl(url)}>
+                <button type="button" key={port.port} className="port-row" disabled={!url} onClick={() => url && onOpenUrl(url)}>
                   <span className="mono">:{port.port}</span>
                   <span className="muted">{port.address === '*' || port.address === '0.0.0.0' ? 'Network visible' : 'Local only'}</span>
                   <ExternalLink size={12} />

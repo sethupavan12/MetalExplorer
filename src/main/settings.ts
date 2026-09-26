@@ -27,6 +27,14 @@ const DEFAULT_SETTINGS: StoredSettings = {
 
 let memoryApiKey = '';
 let cachedSettings: StoredSettings | null = null;
+// safeStorage can block the main thread on a Keychain prompt (for example after the app's
+// signature changes), so it is only touched when a remembered key is saved or used.
+let encryptionAvailable: boolean | null = null;
+
+function isEncryptionAvailable(): boolean {
+  encryptionAvailable ??= safeStorage.isEncryptionAvailable();
+  return encryptionAvailable;
+}
 
 export function getSettings(): AppSettings {
   const stored = readStoredSettings();
@@ -40,15 +48,17 @@ export function getSettings(): AppSettings {
     agentUsage: stored.agentUsage,
     menuBarMonitor: stored.menuBarMonitor,
     hasApiKey: Boolean(memoryApiKey || stored.encryptedApiKey),
-    encryptionAvailable: safeStorage.isEncryptionAvailable()
+    encryptionAvailable
   };
 }
 
 export function getAiSettings(): AppSettings & { apiKey?: string } {
   const settings = getSettings();
   const stored = readStoredSettings();
-  const apiKey = memoryApiKey || decryptApiKey(stored.encryptedApiKey);
-  return { ...settings, apiKey };
+  if (!memoryApiKey && stored.encryptedApiKey) {
+    memoryApiKey = decryptApiKey(stored.encryptedApiKey) ?? '';
+  }
+  return { ...settings, apiKey: memoryApiKey || undefined };
 }
 
 export function updateSettings(update: SettingsUpdate): AppSettings {
@@ -69,11 +79,14 @@ export function updateSettings(update: SettingsUpdate): AppSettings {
     next.encryptedApiKey = undefined;
   }
 
-  if (typeof update.apiKey === 'string' && update.apiKey.trim()) {
-    memoryApiKey = update.apiKey.trim();
+  const keyChanged = typeof update.apiKey === 'string' && Boolean(update.apiKey.trim());
+  if (keyChanged) {
+    memoryApiKey = (update.apiKey as string).trim();
   }
 
-  if (next.rememberApiKey && memoryApiKey) {
+  // Encrypt only when the key or the remember choice changes, not on every settings write.
+  const rememberTurnedOn = next.rememberApiKey && !previous.rememberApiKey;
+  if (next.rememberApiKey && memoryApiKey && (keyChanged || rememberTurnedOn)) {
     next.encryptedApiKey = encryptApiKey(memoryApiKey);
   }
 
@@ -132,7 +145,7 @@ function settingsPath(): string {
 }
 
 function encryptApiKey(apiKey: string): string | undefined {
-  if (!safeStorage.isEncryptionAvailable()) {
+  if (!isEncryptionAvailable()) {
     return undefined;
   }
 
@@ -140,7 +153,7 @@ function encryptApiKey(apiKey: string): string | undefined {
 }
 
 function decryptApiKey(encryptedApiKey?: string): string | undefined {
-  if (!encryptedApiKey || !safeStorage.isEncryptionAvailable()) {
+  if (!encryptedApiKey || !isEncryptionAvailable()) {
     return undefined;
   }
 

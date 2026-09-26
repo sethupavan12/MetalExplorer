@@ -196,7 +196,8 @@ export interface AgentUsage {
   /** Tokens in the most recent turn's prompt, a proxy for the current context size. */
   contextTokens: number | null;
   contextWindow: number | null;
-  turns: number;
+  /** Responses (Claude) or turns (Codex); null when only part of the log was read. */
+  turns: number | null;
   lastActivityAt: string | null;
   gitBranch: string | null;
 }
@@ -258,7 +259,8 @@ export interface AppSettings {
   agentUsage: boolean;
   menuBarMonitor: boolean;
   hasApiKey: boolean;
-  encryptionAvailable: boolean;
+  /** Null until MetalExplorer needs encrypted storage; checking it can trigger a Keychain prompt. */
+  encryptionAvailable: boolean | null;
 }
 
 export interface SettingsUpdate {
@@ -280,6 +282,13 @@ export interface AiExplanation {
   safeToQuit: string;
   riskLevel: RiskLevel;
   recommendedAction: string;
+}
+
+/** The exact process the user approved in a review sheet. `startedAt` is in epoch seconds. */
+export interface TerminateTarget {
+  pid: number;
+  startedAt: number;
+  command: string;
 }
 
 export interface TerminateResult {
@@ -304,12 +313,13 @@ export type MenuCommand =
   | { type: 'stop-selected' }
   | { type: 'focus-agent'; sessionId: string };
 
+
 export interface MetalExplorerApi {
   /** True when the window uses native macOS vibrancy behind the sidebar. */
   vibrancy: boolean;
   listProcesses: () => Promise<ProcessSnapshot>;
   getProcessHistory: (pid: number) => Promise<ProcessHistory>;
-  terminateProcesses: (pids: number[]) => Promise<TerminateResult[]>;
+  terminateProcesses: (targets: TerminateTarget[]) => Promise<TerminateResult[]>;
   openExternal: (url: string) => Promise<void>;
   revealAgentFolder: (sessionId: string) => Promise<boolean>;
   focusAgentHost: (sessionId: string) => Promise<boolean>;

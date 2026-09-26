@@ -121,6 +121,8 @@ const SYSTEM_NAMES = new Set([
 const PROTECTED_PATH_PREFIXES = ['/System/', '/usr/libexec/', '/usr/sbin/', '/sbin/', '/Library/Apple/', '/private/var/db/', '/System/Volumes/Preboot/Cryptexes/'];
 const MCP_PATTERN = /(^|[-_@/.])mcp([-_./]|$)|modelcontextprotocol/;
 const ORPHAN_MIN_UPTIME_SECONDS = 10 * 60;
+/** Past this gap (for example after the window was hidden), a delta is an average over the gap, not current use. */
+const MAX_DELTA_INTERVAL_MS = 30_000;
 
 export interface Classification {
   category: ProcessCategory;
@@ -141,7 +143,7 @@ export interface NetworkByteSample {
 /** Per-process counters carried between samples so rates are measured, not estimated. */
 export interface SamplerState {
   cpu: Map<number, { cpuTimeSeconds: number; sampledAtMs: number; startKey: string }>;
-  network: Map<number, NetworkByteSample & { sampledAtMs: number }>;
+  network: Map<number, NetworkByteSample & { sampledAtMs: number; startKey: string }>;
 }
 
 export function createSamplerState(): SamplerState {
@@ -529,7 +531,8 @@ export function buildProcessesFromOutputs(inputs: SnapshotInputs): { processes: 
   const rawProcessesByPid = new Map(rawProcesses.map((rawProcess) => [rawProcess.pid, rawProcess]));
 
   const processes = rawProcesses.map((sampled): ProcessInfo => {
-    const rawProcess = { ...sampled, cpuPercent: measureCpuPercent(sampled, state, inputs.sampledAtMs) };
+    const startKey = processStartKey(sampled, inputs.sampledAtMs);
+    const rawProcess = { ...sampled, cpuPercent: measureCpuPercent(sampled, startKey, state, inputs.sampledAtMs) };
     const ports = portsByPid.get(rawProcess.pid) ?? [];
     const networkConnections = networkConnectionsByPid.get(rawProcess.pid) ?? [];
     const classification = classifyProcess({ ...rawProcess, ports });
@@ -545,7 +548,7 @@ export function buildProcessesFromOutputs(inputs: SnapshotInputs): { processes: 
       ...rawProcess,
       ports,
       networkConnections,
-      network: measureNetworkUsage(rawProcess.pid, networkConnections.length, networkSamples.get(rawProcess.pid), state, inputs.sampledAtMs),
+      network: measureNetworkUsage(rawProcess.pid, startKey, networkConnections.length, networkSamples.get(rawProcess.pid), state, inputs.sampledAtMs),
       ...classification,
       provenance,
       serviceGroup: buildServiceGroup(rawProcess, classification.category, provenance),
@@ -571,13 +574,20 @@ export function isProtectedProcess(process: Pick<RawProcessInfo, 'pid' | 'comman
   );
 }
 
-function measureCpuPercent(process: RawProcessInfo, state: SamplerState, sampledAtMs: number): number {
-  // pid + start offset guards against pid reuse between samples.
-  const startKey = String(Math.round(sampledAtMs / 1000) - process.uptimeSeconds);
+/** Approximate launch time in epoch seconds. Together with the pid it identifies a process across samples. */
+export function processStartKey(process: Pick<RawProcessInfo, 'uptimeSeconds'>, sampledAtMs: number): string {
+  return String(Math.round(sampledAtMs / 1000) - process.uptimeSeconds);
+}
+
+function sameStart(a: string, b: string): boolean {
+  return Math.abs(Number(a) - Number(b)) <= 2;
+}
+
+function measureCpuPercent(process: RawProcessInfo, startKey: string, state: SamplerState, sampledAtMs: number): number {
   const previous = state.cpu.get(process.pid);
   state.cpu.set(process.pid, { cpuTimeSeconds: process.cpuTimeSeconds, sampledAtMs, startKey });
 
-  if (!previous || sampledAtMs <= previous.sampledAtMs || Math.abs(Number(previous.startKey) - Number(startKey)) > 2) {
+  if (!previous || sampledAtMs <= previous.sampledAtMs || sampledAtMs - previous.sampledAtMs > MAX_DELTA_INTERVAL_MS || !sameStart(previous.startKey, startKey)) {
     return process.cpuPercent;
   }
 
@@ -591,6 +601,7 @@ function measureCpuPercent(process: RawProcessInfo, state: SamplerState, sampled
 
 function measureNetworkUsage(
   pid: number,
+  startKey: string,
   connectionCount: number,
   current: NetworkByteSample | undefined,
   state: SamplerState,
@@ -608,9 +619,16 @@ function measureNetworkUsage(
   }
 
   const previous = state.network.get(pid);
-  state.network.set(pid, { ...current, sampledAtMs });
+  state.network.set(pid, { ...current, sampledAtMs, startKey });
 
-  if (!previous || sampledAtMs <= previous.sampledAtMs || current.downloadedBytes < previous.downloadedBytes) {
+  if (
+    !previous ||
+    sampledAtMs <= previous.sampledAtMs ||
+    sampledAtMs - previous.sampledAtMs > MAX_DELTA_INTERVAL_MS ||
+    !sameStart(previous.startKey, startKey) ||
+    current.downloadedBytes < previous.downloadedBytes ||
+    current.uploadedBytes < previous.uploadedBytes
+  ) {
     return {
       downloadBps: null,
       uploadBps: null,

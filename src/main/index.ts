@@ -8,7 +8,7 @@ import { explainProcessWithAi, redactCommandForAi } from './ai';
 import { Sampler } from './sampler';
 import { getAiSettings, getSettings, updateSettings } from './settings';
 import { isAllowedLocalHttpUrl } from './url-guards';
-import type { AppSettings, MenuCommand, ProcessSnapshot, SettingsUpdate, ThemeName } from '../shared/types';
+import type { AppSettings, MenuCommand, ProcessSnapshot, SettingsUpdate, TerminateTarget, ThemeName } from '../shared/types';
 
 const sampler = new Sampler({
   agentInsights: () => getSettings().agentUsage,
@@ -16,6 +16,8 @@ const sampler = new Sampler({
 });
 
 let mainWindow: BrowserWindow | null = null;
+let rendererReady = false;
+let pendingCommand: MenuCommand | null = null;
 let tray: Tray | null = null;
 let trayTimer: NodeJS.Timeout | null = null;
 
@@ -62,6 +64,10 @@ function createWindow(): void {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+  rendererReady = false;
+  mainWindow.webContents.on('did-start-loading', () => {
+    rendererReady = false;
+  });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedLocalHttpUrl(url)) {
@@ -92,11 +98,11 @@ function showMainWindow(command?: MenuCommand): void {
   mainWindow?.show();
   mainWindow?.focus();
   if (command) {
-    const send = (): void => mainWindow?.webContents.send('menu:command', command);
-    if (mainWindow?.webContents.isLoading()) {
-      mainWindow.webContents.once('did-finish-load', send);
+    if (rendererReady) {
+      mainWindow?.webContents.send('menu:command', command);
     } else {
-      send();
+      // Delivered once the renderer subscribes; a window that is still loading would drop it.
+      pendingCommand = command;
     }
   }
 }
@@ -201,13 +207,21 @@ function buildMenu(): void {
 }
 
 function registerIpcHandlers(): void {
+  ipcMain.on('menu:ready', (event) => {
+    if (event.sender !== mainWindow?.webContents) return;
+    rendererReady = true;
+    if (pendingCommand) {
+      event.sender.send('menu:command', pendingCommand);
+      pendingCommand = null;
+    }
+  });
   ipcMain.handle('processes:list', () => sampler.sample());
   ipcMain.handle('processes:history', (_event, pid: unknown) => sampler.history(requirePid(pid)));
-  ipcMain.handle('processes:terminate', (_event, pids: unknown) => {
-    if (!Array.isArray(pids) || pids.length > 200) {
-      throw new Error('Expected a list of process ids.');
+  ipcMain.handle('processes:terminate', (_event, targets: unknown) => {
+    if (!Array.isArray(targets) || targets.length > 200) {
+      throw new Error('Expected a list of processes to stop.');
     }
-    return sampler.terminate(pids.map(requirePid));
+    return sampler.terminate(targets.map(requireTerminateTarget));
   });
   ipcMain.handle('external:open', (_event, url: unknown) => {
     if (typeof url !== 'string' || !isAllowedLocalHttpUrl(url)) {
@@ -217,7 +231,7 @@ function registerIpcHandlers(): void {
   });
   ipcMain.handle('agents:reveal', async (_event, sessionId: unknown) => {
     const session = typeof sessionId === 'string' ? sampler.findAgent(sessionId) : null;
-    if (!session?.cwd || !isDirectory(session.cwd)) {
+    if (!session?.cwd || !isPlainFolder(session.cwd)) {
       return false;
     }
     return (await shell.openPath(session.cwd)) === '';
@@ -259,6 +273,14 @@ function requirePid(value: unknown): number {
   return value;
 }
 
+function requireTerminateTarget(value: unknown): TerminateTarget {
+  const target = value as Partial<TerminateTarget> | null;
+  if (!target || typeof target !== 'object' || typeof target.command !== 'string' || typeof target.startedAt !== 'number' || !Number.isFinite(target.startedAt)) {
+    throw new Error('Invalid stop request.');
+  }
+  return { pid: requirePid(target.pid), startedAt: Math.round(target.startedAt), command: target.command };
+}
+
 function sanitizeSettingsUpdate(value: unknown): SettingsUpdate {
   if (!value || typeof value !== 'object') {
     return {};
@@ -275,6 +297,11 @@ function sanitizeSettingsUpdate(value: unknown): SettingsUpdate {
   if (typeof input.apiKey === 'string') update.apiKey = input.apiKey;
   if (input.clearApiKey === true) update.clearApiKey = true;
   return update;
+}
+
+/** A real folder, not an `.app` or other bundle that Finder would launch instead of showing. */
+function isPlainFolder(path: string): boolean {
+  return isDirectory(path) && !/\.(app|pkg|mpkg|bundle|framework|plugin|kext|prefPane|appex|xpc)\/?$/i.test(path);
 }
 
 function isDirectory(path: string): boolean {

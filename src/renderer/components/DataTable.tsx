@@ -80,11 +80,13 @@ export function DataTable<T>({
     [rowHeight]
   );
 
+  // Reveal the selection when it changes (for example from the command palette), but not when a new sample merely
+  // re-sorts rows; otherwise the table would jump back while the user scrolls.
+  const selectedIndexRef = useRef(selectedIndex);
+  selectedIndexRef.current = selectedIndex;
   useEffect(() => {
-    if (document.activeElement === scrollRef.current) {
-      ensureVisible(selectedIndex);
-    }
-  }, [ensureVisible, selectedIndex]);
+    ensureVisible(selectedIndexRef.current);
+  }, [ensureVisible, selectedKey]);
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
     if (!rows.length) return;

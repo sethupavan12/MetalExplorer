@@ -18,7 +18,7 @@ export interface PaletteItem {
 /** Spotlight-style command palette (⌘K). Arrow keys move, Return runs, Escape closes. */
 export function CommandPalette({ items, onClose }: { items: PaletteItem[]; onClose: () => void }): JSX.Element {
   const [query, setQuery] = useState('');
-  const [active, setActive] = useState(0);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   const results = useMemo(() => {
@@ -39,7 +39,12 @@ export function CommandPalette({ items, onClose }: { items: PaletteItem[]; onClo
       .map((entry) => entry.item);
   }, [items, query]);
 
-  useEffect(() => setActive(0), [query]);
+  // Track the highlighted item by id so a live refresh that reorders results never changes what Return runs.
+  const foundIndex = results.findIndex((item) => item.id === activeId);
+  const active = foundIndex >= 0 ? foundIndex : 0;
+  const setActive = (update: (index: number) => number): void => setActiveId(results[update(active)]?.id ?? null);
+
+  useEffect(() => setActiveId(null), [query]);
 
   useEffect(() => {
     listRef.current?.querySelector<HTMLElement>(`[data-index="${active}"]`)?.scrollIntoView({ block: 'nearest' });
@@ -87,7 +92,7 @@ export function CommandPalette({ items, onClose }: { items: PaletteItem[]; onClo
                   aria-selected={index === active}
                   data-index={index}
                   className={index === active ? 'is-active' : ''}
-                  onMouseMove={() => setActive(index)}
+                  onMouseMove={() => setActiveId(item.id)}
                   onClick={() => {
                     onClose();
                     item.run();
