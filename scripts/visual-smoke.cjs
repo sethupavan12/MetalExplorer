@@ -1,16 +1,35 @@
+// Renders every view with deterministic mock data, checks layout invariants, and saves screenshots to release/visual/.
 const { app, BrowserWindow } = require('electron');
 const { mkdirSync, writeFileSync } = require('node:fs');
 const path = require('node:path');
 
+const WIDTH = Number(process.env.SMOKE_WIDTH || 1440);
+const HEIGHT = Number(process.env.SMOKE_HEIGHT || 900);
+const VIEWS = [
+  { label: 'Overview', selector: '.gauge-grid' },
+  { label: 'Agents', selector: '.data-table .session-cell' },
+  { label: 'Processes', selector: '.data-table .name-cell' },
+  { label: 'Services', selector: '.data-table .name-cell' },
+  { label: 'Network', selector: '.data-table .name-cell' },
+  { label: 'Cleanup', selector: '.action-bar' },
+  { label: 'Settings', selector: '.settings-card' }
+];
+const THEMES = [
+  { id: 'light', label: 'Light' },
+  { id: 'dark', label: 'Dark' },
+  { id: 'matrix', label: 'Matrix' }
+];
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function main() {
   await app.whenReady();
-
   const win = new BrowserWindow({
-    width: 1440,
-    height: 760,
+    width: WIDTH,
+    height: HEIGHT,
     show: false,
     paintWhenInitiallyHidden: true,
-    backgroundColor: '#07090b',
+    backgroundColor: '#ffffff',
     webPreferences: {
       preload: path.join(__dirname, 'mock-preload.cjs'),
       contextIsolation: true,
@@ -20,312 +39,143 @@ async function main() {
     }
   });
 
+  const errors = [];
+  win.webContents.on('console-message', (_event, level, message) => {
+    if (level >= 3) errors.push(message);
+  });
+
   await win.loadFile(path.join(__dirname, '../out/renderer/index.html'));
-  await new Promise((resolve) => setTimeout(resolve, 1200));
+  await wait(900);
 
-  const outputDir = path.join(__dirname, '../release');
+  const outputDir = path.join(__dirname, '../release/visual');
   mkdirSync(outputDir, { recursive: true });
+  const run = (code) => win.webContents.executeJavaScript(code);
+  const capture = async (name) => {
+    win.webContents.invalidate();
+    await wait(450);
+    const image = await win.webContents.capturePage();
+    writeFileSync(path.join(outputDir, `${name}.png`), image.toPNG());
+  };
 
-  const pages = ['Dashboard', 'Processes', 'Services', 'Cleanup', 'Network', 'Settings'];
-  const themes = [
-    { id: 'light', label: 'Light' },
-    { id: 'dark', label: 'Graphite Dark' },
-    { id: 'matrix', label: 'Matrix' }
-  ];
+  for (const theme of THEMES) {
+    await openView(run, 'Settings');
+    await run(`[...document.querySelectorAll('.theme-swatch')].find((node) => node.textContent.includes(${JSON.stringify(theme.label)}))?.click()`);
+    await wait(250);
+    const applied = await run(`document.querySelector('.app')?.dataset.theme`);
+    if (applied !== theme.id) throw new Error(`Theme ${theme.id} was not applied (got ${applied}).`);
 
-  for (const theme of themes) {
-    await selectTheme(win, theme.label);
-
-    for (const label of pages) {
-      await openPage(win, label);
-      await verifyAppShell(win, label);
-      await verifyFilterToggle(win, label);
-      await verifyScroll(win, label);
-      await verifyReadableText(win, label, theme.id);
-      await resetScrollForCapture(win);
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      const image = await win.webContents.capturePage();
-      const filename = theme.id === 'light' ? `visual-smoke-${label.toLowerCase()}.png` : `visual-smoke-${theme.id}-${label.toLowerCase()}.png`;
-      writeFileSync(path.join(outputDir, filename), image.toPNG());
+    for (const view of VIEWS) {
+      await openView(run, view.label);
+      await verifyView(run, view, theme.id);
+      if (view.label === 'Processes' || view.label === 'Network' || view.label === 'Services') {
+        await run(`document.querySelector('.data-table')?.focus(); document.querySelector('.dt-row')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
+      }
+      await capture(`${theme.id}-${view.label.toLowerCase()}`);
     }
   }
 
+  // Light theme extras: process tree, command palette, and the stop sheet.
+  await openView(run, 'Settings');
+  await run(`[...document.querySelectorAll('.theme-swatch')].find((node) => node.textContent.includes('Light'))?.click()`);
+  await openView(run, 'Processes');
+  await run(`[...document.querySelectorAll('.segmented button')].find((node) => node.textContent.includes('Tree'))?.click()`);
+  await wait(200);
+  const treeIndent = await run(`Math.max(...[...document.querySelectorAll('.dt-row .name-cell')].map((node) => parseFloat(node.style.paddingLeft || '0')))`);
+  if (!(treeIndent > 0)) throw new Error('Tree view did not indent child processes.');
+  await capture('light-processes-tree');
+
+  await run(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true }))`);
+  await wait(200);
+  await run(`(() => { const input = document.querySelector('.palette-input input'); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; setter.call(input, 'claude'); input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await wait(150);
+  const paletteRows = await run(`document.querySelectorAll('.palette-list button').length`);
+  if (!paletteRows) throw new Error('Command palette returned no results for "claude".');
+  await capture('light-command-palette');
+  await run(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true }))`);
+  await wait(150);
+
+  await openView(run, 'Agents');
+  await run(`[...document.querySelectorAll('.inspector .btn')].find((node) => node.textContent.includes('Stop Session'))?.click()`);
+  await wait(300);
+  const sheet = await run(`Boolean(document.querySelector('.sheet'))`);
+  if (!sheet) throw new Error('Stop session sheet did not open.');
+  await capture('light-stop-sheet');
+
+  if (errors.length) {
+    throw new Error(`Renderer logged errors:\n${errors.join('\n')}`);
+  }
+
+  console.log(`Visual smoke passed. Screenshots in ${outputDir}`);
   app.quit();
 }
 
-async function resetScrollForCapture(win) {
-  await win.webContents.executeJavaScript(`
-    for (const selector of ['.dashboard', '.overview', '.settings-panel', '.table-scroll', '.inspector-scroll']) {
-      const element = document.querySelector(selector);
-      if (element) element.scrollTop = 0;
-    }
-  `);
+async function openView(run, label) {
+  const found = await run(`(() => {
+    const item = [...document.querySelectorAll('.sidebar-item')].find((node) => node.querySelector('.sidebar-label')?.textContent === ${JSON.stringify(label)});
+    item?.click();
+    return Boolean(item);
+  })()`);
+  if (!found) throw new Error(`Sidebar item ${label} not found.`);
+  await wait(250);
 }
 
-async function verifyAppShell(win, label) {
-  const shell = await win.webContents.executeJavaScript(`
-    (() => {
-      const bodyText = document.body.innerText || '';
-      const dashboardHeader = document.querySelector('.health-briefing, .command-center');
-      const dashboardHeaderRect = dashboardHeader?.getBoundingClientRect();
-      return {
-        mounted: Boolean(document.querySelector('.app-frame')),
-        dashboardHeaderHeight: dashboardHeaderRect ? Math.round(dashboardHeaderRect.height) : null,
-        cssLeak:
-          bodyText.includes('.process-cell') ||
-          bodyText.includes('.network-remote') ||
-          bodyText.includes('-webkit-line-clamp')
-      };
-    })();
-  `);
+async function verifyView(run, view, theme) {
+  const result = await run(`(() => {
+    const app = document.querySelector('.app');
+    const content = document.querySelector('.content');
+    const text = document.body.innerText || '';
+    const toolbarTitle = document.querySelector('.toolbar-title h1')?.textContent;
+    const bodyOverflow = document.documentElement.scrollWidth > window.innerWidth + 1;
+    const color = getComputedStyle(document.querySelector('.toolbar-title h1')).color;
+    const background = getComputedStyle(content).backgroundColor;
+    return {
+      mounted: Boolean(app && content),
+      hasSelector: Boolean(document.querySelector(${JSON.stringify(view.selector)})),
+      toolbarTitle,
+      bodyOverflow,
+      cssLeak: text.includes('{') && text.includes('--'),
+      undefinedText: /\\bundefined\\b|\\bNaN\\b/.test(text),
+      color,
+      background
+    };
+  })()`);
 
-  if (!shell.mounted || shell.cssLeak) {
-    throw new Error(`App shell smoke failed for ${label}: ${JSON.stringify(shell)}`);
-  }
+  const problems = [];
+  if (!result.mounted) problems.push('app not mounted');
+  if (!result.hasSelector) problems.push(`missing ${view.selector}`);
+  if (result.toolbarTitle !== view.label) problems.push(`toolbar title "${result.toolbarTitle}"`);
+  if (result.bodyOverflow) problems.push('page scrolls horizontally');
+  if (result.cssLeak) problems.push('CSS text leaked into the page');
+  if (result.undefinedText) problems.push('"undefined" or "NaN" rendered');
+  if (contrast(parseColor(result.color), parseColor(result.background)) < 4.5) problems.push(`low title contrast ${result.color} on ${result.background}`);
 
-  if (label === 'Dashboard' && (!shell.dashboardHeaderHeight || shell.dashboardHeaderHeight < 110)) {
-    throw new Error(`Dashboard header smoke failed for ${label}: ${JSON.stringify(shell)}`);
-  }
-}
-
-async function openPage(win, label) {
-  await win.webContents.executeJavaScript(`
-    [...document.querySelectorAll('button')]
-      .find((button) => button.textContent && button.textContent.includes(${JSON.stringify(label)}))
-      ?.click();
-  `);
-  await new Promise((resolve) => setTimeout(resolve, 350));
-}
-
-async function selectTheme(win, themeLabel) {
-  await openPage(win, 'Settings');
-  await win.webContents.executeJavaScript(`
-    [...document.querySelectorAll('.theme-option')]
-      .find((button) => button.textContent && button.textContent.includes(${JSON.stringify(themeLabel)}))
-      ?.click();
-  `);
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  await win.webContents.executeJavaScript(`
-    [...document.querySelectorAll('button')]
-      .find((button) => button.textContent && button.textContent.includes('Save Settings'))
-      ?.click();
-  `);
-  await new Promise((resolve) => setTimeout(resolve, 450));
-}
-
-async function verifyScroll(win, label) {
-  const scrollCheck = await win.webContents.executeJavaScript(`
-    (() => {
-      const content = document.querySelector('.dashboard, .overview, .settings-panel, .table-panel');
-      let activeScroll = null;
-      if (${JSON.stringify(label)} === 'Dashboard') {
-        activeScroll = document.querySelector('.dashboard');
-      } else if (${JSON.stringify(label)} === 'Settings') {
-        activeScroll = document.querySelector('.settings-panel');
-      } else {
-        activeScroll = document.querySelector('.table-scroll');
-      }
-
-      if (!content || !activeScroll) {
-        return { ok: false, reason: 'missing scroll container' };
-      }
-
-      const gridRow = getComputedStyle(content).gridRowStart;
-      const overflowY = getComputedStyle(activeScroll).overflowY;
-
-      return {
-        ok: true,
-        gridRow,
-        overflowY,
-        before: activeScroll.scrollTop,
-        scrollHeight: activeScroll.scrollHeight,
-        clientHeight: activeScroll.clientHeight
-      };
-    })();
-  `);
-  if (!scrollCheck.ok || scrollCheck.gridRow !== '4') {
-    throw new Error(`Scroll smoke failed for ${label}: ${JSON.stringify(scrollCheck)}`);
-  }
-
-  if (scrollCheck.scrollHeight > scrollCheck.clientHeight) {
-    await win.webContents.executeJavaScript(`
-      (() => {
-        let activeScroll = null;
-        if (${JSON.stringify(label)} === 'Dashboard') {
-          activeScroll = document.querySelector('.dashboard');
-        } else if (${JSON.stringify(label)} === 'Settings') {
-          activeScroll = document.querySelector('.settings-panel');
-        } else {
-          activeScroll = document.querySelector('.table-scroll');
-        }
-        if (activeScroll) activeScroll.scrollTop = activeScroll.scrollHeight;
-      })();
-    `);
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-
-  const afterScrollTop = await win.webContents.executeJavaScript(`
-    (() => {
-      let activeScroll = null;
-      if (${JSON.stringify(label)} === 'Dashboard') {
-        activeScroll = document.querySelector('.dashboard');
-      } else if (${JSON.stringify(label)} === 'Settings') {
-        activeScroll = document.querySelector('.settings-panel');
-      } else {
-        activeScroll = document.querySelector('.table-scroll');
-      }
-      const after = activeScroll?.scrollTop ?? null;
-      if (activeScroll) activeScroll.scrollTop = 0;
-      return after;
-    })();
-  `);
-  const shouldScroll = label === 'Processes';
-  if (
-    (scrollCheck.scrollHeight > scrollCheck.clientHeight && afterScrollTop <= scrollCheck.before) ||
-    (shouldScroll && scrollCheck.scrollHeight <= scrollCheck.clientHeight)
-  ) {
-    throw new Error(`Scroll smoke failed for ${label}: ${JSON.stringify({ ...scrollCheck, afterScrollTop })}`);
+  if (problems.length) {
+    throw new Error(`${view.label} (${theme}) failed: ${problems.join('; ')}`);
   }
 }
 
-async function verifyFilterToggle(win, label) {
-  const shouldHaveFilters = !['Dashboard', 'Settings'].includes(label);
-  const before = await win.webContents.executeJavaScript(`
-    (() => ({
-      button: Boolean(document.querySelector('.filter-toggle')),
-      bar: Boolean(document.querySelector('.filter-bar'))
-    }))();
-  `);
-
-  if (!shouldHaveFilters) {
-    if (before.button || before.bar) {
-      throw new Error(`Filter smoke failed for ${label}: ${JSON.stringify(before)}`);
-    }
-    return;
-  }
-
-  if (!before.button || before.bar) {
-    throw new Error(`Filter smoke failed for ${label}: ${JSON.stringify(before)}`);
-  }
-
-  await win.webContents.executeJavaScript(`document.querySelector('.filter-toggle')?.click();`);
-  await new Promise((resolve) => setTimeout(resolve, 120));
-
-  const open = await win.webContents.executeJavaScript(`
-    (() => {
-      const bar = document.querySelector('.filter-bar');
-      return {
-        button: Boolean(document.querySelector('.filter-toggle.active')),
-        bar: Boolean(bar),
-        groups: bar ? bar.querySelectorAll('.filter-group').length : 0
-      };
-    })();
-  `);
-
-  if (!open.button || !open.bar || open.groups !== 3) {
-    throw new Error(`Filter open smoke failed for ${label}: ${JSON.stringify(open)}`);
-  }
-
-  await win.webContents.executeJavaScript(`document.querySelector('.filter-toggle')?.click();`);
-  await new Promise((resolve) => setTimeout(resolve, 120));
-
-  const closed = await win.webContents.executeJavaScript(`
-    (() => ({
-      button: Boolean(document.querySelector('.filter-toggle.active')),
-      bar: Boolean(document.querySelector('.filter-bar'))
-    }))();
-  `);
-
-  if (closed.button || closed.bar) {
-    throw new Error(`Filter close smoke failed for ${label}: ${JSON.stringify(closed)}`);
-  }
+function parseColor(value) {
+  const parts = value.match(/[\d.]+/g)?.map(Number) || [0, 0, 0, 1];
+  return { r: parts[0], g: parts[1], b: parts[2], a: parts[3] ?? 1 };
 }
 
-async function verifyReadableText(win, label, themeId) {
-  const failures = await win.webContents.executeJavaScript(`
-    (() => {
-      function parseColor(value) {
-        const match = value.match(/rgba?\\(([^)]+)\\)/);
-        if (!match) return null;
-        const parts = match[1]
-          .replace(/\\//g, ' ')
-          .split(/[\\s,]+/)
-          .filter(Boolean)
-          .map((part) => Number.parseFloat(part.trim()));
-        const [r, g, b] = parts;
-        const a = Number.isFinite(parts[3]) ? parts[3] : 1;
-        if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) return null;
-        return { r, g, b, a };
-      }
+function luminance({ r, g, b }) {
+  const channel = (value) => {
+    const scaled = value / 255;
+    return scaled <= 0.03928 ? scaled / 12.92 : ((scaled + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+}
 
-      function luminance(channel) {
-        const value = channel / 255;
-        return value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
-      }
-
-      function contrast(foreground, background) {
-        const fg = 0.2126 * luminance(foreground.r) + 0.7152 * luminance(foreground.g) + 0.0722 * luminance(foreground.b);
-        const bg = 0.2126 * luminance(background.r) + 0.7152 * luminance(background.g) + 0.0722 * luminance(background.b);
-        return (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05);
-      }
-
-      function blend(top, bottom) {
-        const alpha = top.a + bottom.a * (1 - top.a);
-        if (alpha <= 0) return { r: 255, g: 255, b: 255, a: 1 };
-        return {
-          r: (top.r * top.a + bottom.r * bottom.a * (1 - top.a)) / alpha,
-          g: (top.g * top.a + bottom.g * bottom.a * (1 - top.a)) / alpha,
-          b: (top.b * top.a + bottom.b * bottom.a * (1 - top.a)) / alpha,
-          a: alpha
-        };
-      }
-
-      function effectiveBackground(element) {
-        const colors = [];
-        let current = element;
-        while (current) {
-          const color = parseColor(getComputedStyle(current).backgroundColor);
-          if (color && color.a > 0) {
-            colors.push(color);
-          }
-          current = current.parentElement;
-        }
-
-        let background = parseColor(getComputedStyle(document.body).backgroundColor) || { r: 255, g: 255, b: 255, a: 1 };
-        for (let index = colors.length - 1; index >= 0; index -= 1) {
-          background = blend(colors[index], background);
-        }
-        return background;
-      }
-
-      return [...document.querySelectorAll('body *')]
-        .filter((element) => {
-          const rect = element.getBoundingClientRect();
-          const style = getComputedStyle(element);
-          const hasDirectText = [...element.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
-          return hasDirectText && rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && Number(style.opacity) > 0.5;
-        })
-        .map((element) => {
-          const style = getComputedStyle(element);
-          const foreground = parseColor(style.color);
-          const background = effectiveBackground(element);
-          return {
-            text: element.textContent.trim().replace(/\\s+/g, ' ').slice(0, 80),
-            selector: element.className || element.tagName.toLowerCase(),
-            color: style.color,
-            background: getComputedStyle(element).backgroundColor,
-            resolvedBackground: background ? [Math.round(background.r), Math.round(background.g), Math.round(background.b), Number(background.a.toFixed(2))] : null,
-            ratio: foreground && background ? Number(contrast(foreground, background).toFixed(2)) : 99
-          };
-        })
-        .filter((item) => item.ratio < 2.8)
-        .slice(0, 8);
-    })();
-  `);
-
-  if (failures.length) {
-    throw new Error(`Contrast smoke failed for ${themeId}/${label}: ${JSON.stringify(failures)}`);
-  }
+function contrast(foreground, background) {
+  // Blend a translucent foreground over the background before measuring.
+  const blended = {
+    r: foreground.r * foreground.a + background.r * (1 - foreground.a),
+    g: foreground.g * foreground.a + background.g * (1 - foreground.a),
+    b: foreground.b * foreground.a + background.b * (1 - foreground.a)
+  };
+  const [light, dark] = [luminance(blended), luminance(background)].sort((a, b) => b - a);
+  return (light + 0.05) / (dark + 0.05);
 }
 
 main().catch((error) => {

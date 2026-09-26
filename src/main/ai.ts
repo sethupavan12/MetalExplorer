@@ -107,6 +107,7 @@ export async function explainProcessWithAi(process: ProcessInfo, settings: AppSe
   const baseUrl = settings.baseUrl.replace(/\/+$/, '');
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
+    signal: AbortSignal.timeout(45_000),
     headers: {
       Authorization: `Bearer ${settings.apiKey}`,
       'Content-Type': 'application/json'
@@ -134,7 +135,7 @@ export async function explainProcessWithAi(process: ProcessInfo, settings: AppSe
             category: process.category,
             confidence: process.confidence,
             evidence: process.evidence,
-            provenance: process.provenance,
+            provenance: { ...process.provenance, commandPreview: redactCommandForAi(process.provenance.commandPreview) },
             serviceGroup: process.serviceGroup,
             localDescription: process.description,
             command: redactCommandForAi(process.command),
