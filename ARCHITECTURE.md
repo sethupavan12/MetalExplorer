@@ -1,115 +1,91 @@
 # Architecture
 
-MetalExplorer is an Electron app with a strict split between OS access, IPC, and UI.
+MetalExplorer is an Electron app with a strict split between OS access (main), the IPC bridge (preload), and UI (renderer).
 
 ```text
 src/main
-  index.ts       Electron window, IPC handlers, external URL guard
-  processes.ts   ps/lsof/nettop collection, classification, termination guard
-  settings.ts    local settings and API key storage
-  ai.ts          OpenAI-compatible explanation calls and JSON normalization
+  index.ts          window, native menu, IPC handlers, menu bar monitor, window state
+  sampler.ts        stateful sampler: runs the macOS tools, owns history and deltas, guarded stops
+  processes.ts      ps/lsof/nettop parsing, classification, per-sample CPU and network rates
+  agents.ts         coding agent session detection, process tree aggregation, terminal host detection
+  agent-catalog.ts  known coding agent CLIs and exact-match detection
+  agent-usage.ts    opt-in token usage reader for Claude Code and Codex local files
+  system.ts         vm_stat and sysctl parsing (memory used, pressure, swap)
+  settings.ts       settings.json and API key storage
+  ai.ts             OpenAI-compatible explanation calls, redaction, JSON normalization
+  url-guards.ts     local-only URL allow list
 
 src/preload
-  index.ts       typed contextBridge API
+  index.ts          typed contextBridge API (sandboxed, CommonJS)
 
 src/renderer
-  App.tsx        React application and view state
-  styles.css     app shell, themes, pane layout, tables, inspector
+  App.tsx           app shell: sampling loop, navigation, selection, commands, sheets
+  lib/              model (filters, rules, findings, tree), formatting, preferences
+  components/       DataTable (virtualized), Sparkline, CommandPalette, StopSheet, UI primitives
+  views/            Overview, Agents, process tables, inspectors, Settings
+  styles.css        macOS design tokens and themes
 
 src/shared
-  types.ts       shared contracts between main, preload, and renderer
+  types.ts          contracts between main, preload, and renderer
 ```
 
-## Data flow
+## Sampling
 
-1. The renderer calls `window.metalExplorer.listProcesses()`.
-2. The preload bridge forwards the request through Electron IPC.
-3. The main process runs macOS tools:
-   - `/bin/ps` for process metadata.
-   - `/usr/sbin/lsof` for listening ports and established TCP connections.
-   - `/usr/bin/nettop` for network byte samples.
-4. `src/main/processes.ts` parses and classifies the results.
-5. The renderer displays the snapshot in Dashboard, Processes, Services, Agents, Cleanup, and Network views.
+The renderer asks for a snapshot on a timer (1 to 10 seconds, default 3). Polling pauses while the window is hidden.
 
-Process snapshots are held in memory. They are not written to disk.
+`Sampler.sample()` coalesces concurrent callers (renderer, menu bar monitor, startup prime) into one run of:
+
+- `/bin/ps -axo pid,ppid,user,pcpu,pmem,rss,vsz,etime,time,state,tty,args` and `/bin/ps -axo pid,comm`
+- `/usr/sbin/lsof` for listening ports and established TCP connections
+- `/usr/bin/nettop` for cumulative per-process network bytes
+- `/usr/bin/vm_stat` and `/usr/sbin/sysctl` for memory, pressure, and swap
+
+CPU percent is measured, not estimated: the sampler keeps each process's cumulative CPU time and divides the delta by the wall-clock interval, the same method Activity Monitor uses. The first sample for a process falls back to the `ps` average. Network rates use the same delta approach on `nettop` byte counters. Per-PID state is pruned when a process exits, and a start-time key guards against PID reuse.
+
+History for charts (system, per process, per agent session) lives in memory in ring buffers of 60 to 120 samples. Nothing is written to disk.
 
 ## Classification
 
-Classification is local and heuristic-based. It looks at process owner, command path, process name, listening ports, and known hints:
+`classifyProcess` is local and evidence-based. It matches exact executable names, app bundle names (`/Applications/Foo.app/...`), script paths under `node_modules`, and command tokens. It deliberately avoids substring matching, which used to classify `AMPDeviceDiscoveryAgent` as an agent or `knowledge-edge` as a browser.
 
-- macOS system services
-- local servers
-- AI agents and MCP tools
-- developer tools
-- databases
-- browsers
-- unknown listeners
-- ordinary user apps
+Categories: macOS system (root, `_` system accounts, protected paths), coding agents, databases, local model runtimes, MCP servers, dev servers, developer tools, browsers, app bundles, unknown listeners, and other user processes.
 
-The local description is intentionally cautious. It says what the process likely is, not what it certainly is.
+Cleanup candidates need positive evidence: an MCP server or dev tool whose parent exited (reparented to launchd for at least 10 minutes), a dev server still listening, or a background dev process busy for over 30 minutes. Live coding agent sessions and apps are never cleanup candidates.
+
+## Coding agent sessions
+
+`findAgentRoots` finds top-level agent processes using `agent-catalog.ts`. An agent started by another agent belongs to the outer session. `buildAgentSessions` then:
+
+- walks each root's descendants to sum CPU, memory, network, ports, and process count
+- tracks CPU time including children that already exited
+- walks ancestors to find the terminal app bundle and any multiplexer (tmux, zellij, screen, herdr)
+- resolves the working directory with `lsof -d cwd` (cached for 15 seconds)
+- sets status from Claude Code's own state file when insights are on, otherwise from recent CPU and transcript activity
+
+`AgentUsageReader` (opt-in) reads Claude Code transcripts incrementally from the last byte offset, so a long session is parsed once and then only appended lines are read. Codex rollouts are cumulative, so only the tail is read. Both extract usage numbers, model, branch, and timestamps only.
 
 ## Termination boundary
 
-Termination is handled only in `terminateProcessByPid`.
+All stops go through `Sampler.terminate(pids)`:
 
-Before sending a signal, MetalExplorer refreshes the process snapshot and verifies:
+- The review sheet freezes the processes it shows. The renderer sends each one's PID, command, and start time (the identity the user approved), never a bare PID.
+- A fresh `ps` lookup must match that approved identity (same command, start time within 3 seconds). Otherwise the PID was reused and nothing is sent.
+- The latest sample must also match it, and must mark the process as stoppable.
+- The reviewed process must be marked safe to terminate, owned by the current user, and not MetalExplorer or Electron.
 
-- PID is an integer greater than 1.
-- PID still exists.
-- Process is owned by the current macOS user.
-- Process is not MetalExplorer itself.
-- Process is not classified as protected.
-- Process is not root-owned or an obvious macOS system path.
-
-MetalExplorer sends `SIGTERM`. It does not send `SIGKILL`.
+Only `SIGTERM` is sent. There is no `SIGKILL` path.
 
 ## AI boundary
 
-AI calls live in `src/main/ai.ts`.
-
-The app does not call AI during process refresh. The only AI path is user initiated: click `AI Explain` for the selected process.
-
-Before sending the command string to the configured AI endpoint, the main process redacts common secret-bearing arguments and environment-style values. The local UI may still show the raw command because it is not leaving the machine.
-
-The model is asked to return strict JSON with:
-
-- `summary`
-- `activity`
-- `resourceReason`
-- `safeToQuit`
-- `riskLevel`
-- `recommendedAction`
-
-The parser accepts fenced JSON, nested JSON, and plain text fallback. The UI should never show raw model JSON as the explanation summary.
-
-## Storage
-
-Settings are stored in Electron's `app.getPath('userData')` directory as `settings.json`.
-
-Saved:
-
-- base URL
-- model
-- refresh interval
-- theme
-- remember-key preference
-- encrypted API key, only when enabled and supported
-
-Not saved:
-
-- process snapshots
-- process history
-- network history
-- AI responses
-- termination history
+AI calls live in `src/main/ai.ts` and run only when the user clicks Explain. The renderer sends a PID; the main process looks up that process in its own latest sample and redacts secret-looking command arguments (including the command preview) before the request. Requests time out after 45 seconds.
 
 ## Renderer safety
 
-The renderer has `contextIsolation: true` and `nodeIntegration: false`.
-
-Only the typed API in `src/preload/index.ts` is exposed. Renderer code cannot directly import Node APIs.
-
-External URL opening is restricted to local HTTP URLs for service links:
+- `sandbox: true`, `contextIsolation: true`, `nodeIntegration: false`.
+- Only the typed API in `src/preload/index.ts` is exposed.
+- IPC handlers validate every argument (PIDs, session ids, settings fields).
+- The CSP allows no remote scripts or connections; the renderer never makes network requests.
+- Navigation away from the app is blocked. External links are limited to local HTTP service URLs:
 
 ```text
 localhost
@@ -118,9 +94,18 @@ localhost
 0.0.0.0
 ```
 
+## Storage
+
+`settings.json` and `window-state.json` in `app.getPath('userData')`, both mode `0600`. Settings are cached in memory and written only when changed. The renderer keeps view preferences and user rules in local storage. See [Safety and Privacy](docs/SAFETY_AND_PRIVACY.md) for the full list.
+
+## Testing
+
+- `npm test` runs Vitest suites for parsing, classification, CPU deltas, agent detection, session aggregation, and usage parsing with fixture files.
+- `npm run visual:smoke` renders every view in Light, Dark, and Matrix with deterministic mock data (`scripts/mock-preload.cjs`), checks layout invariants (no horizontal page scroll, no `undefined`/`NaN`, title contrast), and writes screenshots to `release/visual/`.
+
 ## Current constraints
 
-- macOS only.
-- Packaging currently targets Apple Silicon.
-- Network speed is derived from `nettop` samples and may show "measuring" or "unavailable" when macOS does not provide a clean sample.
+- macOS only. Packaging targets Apple Silicon first.
+- Network rates depend on `nettop` and may show "Measuring" on the first sample.
+- `lsof` only reports sockets for the current user's processes without admin rights.
 - This is a process explainability tool, not an antivirus scanner.

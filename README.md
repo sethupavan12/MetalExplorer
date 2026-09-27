@@ -1,6 +1,6 @@
 # MetalExplorer
 
-> A macOS task manager for the agent era. See every process, local server, AI agent, and internet connection with plain-English explanations and guarded cleanup.
+> A native macOS activity monitor for the agent era. Watch every Claude Code, Codex, OpenCode, and Gemini session in one place, see what each one is burning, and clean up what they leave behind.
 
 ![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon%20first-111111)
 ![License](https://img.shields.io/badge/license-MIT-brightgreen)
@@ -8,43 +8,49 @@
 ![Local first](https://img.shields.io/badge/privacy-local%20first-2ea043)
 
 <p align="center">
-  <img src="docs/assets/metalexplorer-dashboard-v0.2.0.png" alt="MetalExplorer dashboard showing system health, review findings, network activity, cleanup candidates, and the system inspector" width="960">
+  <img src="docs/assets/metalexplorer-overview.png" alt="MetalExplorer overview with CPU, memory, network, and coding agent gauges, agent session cards, findings, and top consumers" width="960">
 </p>
 
-MetalExplorer is for people who run local AI tools, MCP servers, dev servers, package scripts, databases, browser helpers, and background agents, then lose track of what is still alive.
+If you run several coding agents at once, your Mac is full of processes you did not start by hand: test watchers, dev servers, MCP servers, headless browsers, language servers. Some belong to a session that is still working. Some were left behind when a session ended.
 
-Activity Monitor tells you that something is running. MetalExplorer tells you what it probably is, why it matters, whether it is talking to the internet, and whether it is reasonable to stop.
-
-## Why this exists
-
-Modern local development is no longer just `npm run dev` on one port.
-
-AI coding tools start helper processes. MCP servers stay alive. Local packages bind random ports. Browser tooling spawns helpers. Some of it is useful. Some of it is stale. Some of it deserves a closer look.
-
-MetalExplorer makes that visible without asking non-expert users to decode `lsof`, `ps`, `nettop`, or unclear process names.
+Activity Monitor shows a flat list of `node` and `claude`. MetalExplorer shows which terminal each agent lives in, what its whole process tree is using, whether it is working or waiting for you, and which leftovers are safe to stop.
 
 ## Highlights
 
-- Dashboard for local workload, internet activity, cleanup pressure, and general health.
-- Dense process table with CPU, memory, PID, user, uptime, category, description, ports, and network activity.
-- Dedicated views for Processes, Services, Agents, Cleanup, and Network.
-- Collapsible filters for kind, risk, and activity.
-- Resizable left, center, and right panes with a collapsible icon-only sidebar.
-- Process inspector with command, tags, ports, internet services, impact score, and uptime.
-- Optional AI explanation through any OpenAI-compatible `/chat/completions` endpoint.
-- Guarded termination for current-user processes that are likely safe to stop.
-- Local-first settings, dark mode, and Matrix theme.
+**Coding agents in one place**
+
+- Detects Claude Code, Codex, OpenCode, Gemini CLI, Aider, Amp, Goose, Crush, Qwen Code, Cursor Agent, Copilot CLI, Factory Droid, and Kiro CLI.
+- Per session: CPU and memory for the whole process tree, CPU time (including children that already exited), process count, servers it started, network traffic, and live history charts.
+- Shows the terminal (WezTerm, iTerm2, Terminal, Ghostty, VS Code, Cursor, and more), tmux or zellij, tty, and folder.
+- Opt-in session insights read the usage counters Claude Code and Codex already keep: tokens, model, context size, branch, and whether the agent is working or needs your input.
+- Bring the terminal forward, open the folder, copy the resume command, or stop a session after a review sheet.
+- Optional notification when a session finishes its turn and needs your input, and an optional menu bar monitor.
+
+<p align="center">
+  <img src="docs/assets/metalexplorer-agents.png" alt="Agents view in dark mode listing four coding agent sessions with status, CPU sparklines, memory, and tokens, and an inspector with compute and token details" width="960">
+</p>
+
+**A better Activity Monitor**
+
+- CPU measured from CPU time deltas like Activity Monitor, plus memory used, memory pressure, swap, load, and network throughput.
+- Process list or tree, virtualized for hundreds of rows, with keyboard navigation and a ⌘K command palette.
+- Services view answers "what is listening, and can my network reach it?", including which agent session started it.
+- Network view shows which processes talk to the internet and where.
+- Cleanup queue built from evidence: orphaned MCP servers, abandoned dev servers, runaway background builds. Never your live sessions or apps.
+- Every flag explains itself. Every stop goes through a review sheet and a PID reuse check.
+- System, Light, Dark, and Matrix themes with native sidebar vibrancy.
 
 ## Safety model
 
 MetalExplorer is intentionally conservative.
 
-- It reads process and network state from standard macOS tools: `ps`, `lsof`, and `nettop`.
+- It reads process, network, and memory state from standard macOS tools: `ps`, `lsof`, `nettop`, `vm_stat`, and `sysctl`.
+- Agent session insights are off until you turn them on, and they read usage numbers only, never prompts or replies.
 - It does not install a daemon, kernel extension, login item, browser extension, or network proxy.
 - It does not require admin privileges.
 - It sends `SIGTERM`, not `SIGKILL`.
 - It blocks termination for PID 0, PID 1, root-owned processes, obvious macOS system paths, and MetalExplorer itself.
-- It does not send process data to AI unless you click `AI Explain`.
+- It does not send process data to AI unless you click `Explain`.
 - API keys stay in memory by default. If you enable "Remember key locally", Electron `safeStorage` is used when available.
 
 Read the full safety and privacy notes:
@@ -115,43 +121,44 @@ AI is optional. Without an API key, the local descriptions, categories, filters,
 
 Saved locally:
 
-- Base URL
-- Model
-- Refresh interval
-- Theme
-- Pane sizes and collapsed sidebar state
-- Remember-key preference
-- Encrypted API key, only when explicitly enabled and supported by `safeStorage`
+- Settings: AI base URL, model, refresh interval, theme, session insights and menu bar preferences
+- Remember-key preference, and the API key encrypted with `safeStorage` only when you enable it
+- Window position, last open view, sort order, and your keep/flag rules
 
 Not saved:
 
-- Process history
-- Network history
+- Process or network history (charts live in memory and vanish when you quit)
+- Agent token usage or transcript data
 - AI responses
-- Search history
-- Termination history
+- Search or termination history
 
 ## What can be sent to AI
 
-Only when you click `AI Explain`, MetalExplorer sends the selected process details to the configured AI endpoint:
-
-- Process name, PID, parent PID, user
-- CPU, memory, uptime
-- Local ports
-- Local category and local description
-- Command path and arguments
-- Local safe-termination flag
+Only when you click `Explain` on a process, MetalExplorer sends a summary of that one process to your configured endpoint: name, PID, parent, user, CPU, memory, uptime, ports, local classification and evidence, launch details, and the command line with common secrets redacted.
 
 Process command lines can contain secrets if another app was started with secrets in CLI arguments. Review [Safety and Privacy](docs/SAFETY_AND_PRIVACY.md) before using AI explanations on sensitive machines.
+
+## Keyboard
+
+| Shortcut | Action |
+| --- | --- |
+| ⌘1 to ⌘6 | Overview, Agents, Processes, Services, Network, Cleanup |
+| ⌘K | Command palette: jump to any process, agent, or action |
+| ⌘F or / | Search |
+| ↑ ↓, Page Up/Down | Move through tables |
+| ⌘⌫ | Stop the selected process or session (opens a review sheet) |
+| ⌥⌘I, ⌃⌘S | Toggle inspector, toggle sidebar |
+| ⌘R | Refresh now |
+| ⌘, | Settings |
 
 ## Project structure
 
 ```text
-src/main        Electron main process, macOS process parsing, settings, AI calls
-src/preload     Typed IPC bridge exposed to the renderer
-src/renderer    React UI
+src/main        Sampler, macOS parsing, classification, agent sessions, settings, AI calls
+src/preload     Typed, sandboxed IPC bridge exposed to the renderer
+src/renderer    React UI: views, components, and model helpers
 src/shared      Shared TypeScript contracts
-tests           Vitest tests for parsing, classification, and AI parsing
+tests           Vitest tests for parsing, classification, agents, and AI parsing
 scripts         Visual smoke test and renderer mock data
 docs            Product, safety, launch, and contributor documentation
 ```

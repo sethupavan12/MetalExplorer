@@ -1,23 +1,28 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type {
-  AiExplanation,
-  AppSettings,
-  DiagnosticsExportResult,
-  MetalExplorerApi,
-  ProcessInfo,
-  ProcessSnapshot,
-  SettingsUpdate,
-  TerminateResult
-} from '../shared/types';
+import type { IpcRendererEvent } from 'electron';
+import type { MenuCommand, MetalExplorerApi } from '../shared/types';
 
 const api: MetalExplorerApi = {
-  listProcesses: () => ipcRenderer.invoke('processes:list') as Promise<ProcessSnapshot>,
-  terminateProcess: (pid: number) => ipcRenderer.invoke('processes:terminate', pid) as Promise<TerminateResult>,
-  openExternal: (url: string) => ipcRenderer.invoke('external:open', url) as Promise<void>,
-  getSettings: () => ipcRenderer.invoke('settings:get') as Promise<AppSettings>,
-  updateSettings: (update: SettingsUpdate) => ipcRenderer.invoke('settings:update', update) as Promise<AppSettings>,
-  explainProcess: (process: ProcessInfo) => ipcRenderer.invoke('ai:explain', process) as Promise<AiExplanation>,
-  exportDiagnostics: (process: ProcessInfo) => ipcRenderer.invoke('diagnostics:export', process) as Promise<DiagnosticsExportResult>
+  vibrancy: process.platform === 'darwin',
+  listProcesses: () => ipcRenderer.invoke('processes:list'),
+  getProcessHistory: (pid) => ipcRenderer.invoke('processes:history', pid),
+  terminateProcesses: (targets) => ipcRenderer.invoke('processes:terminate', targets),
+  openExternal: (url) => ipcRenderer.invoke('external:open', url),
+  revealAgentFolder: (sessionId) => ipcRenderer.invoke('agents:reveal', sessionId),
+  focusAgentHost: (sessionId) => ipcRenderer.invoke('agents:focus', sessionId),
+  copyText: (text) => ipcRenderer.invoke('clipboard:write', text),
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  updateSettings: (update) => ipcRenderer.invoke('settings:update', update),
+  explainProcess: (pid) => ipcRenderer.invoke('ai:explain', pid),
+  exportDiagnostics: (pid) => ipcRenderer.invoke('diagnostics:export', pid),
+  onMenuCommand: (listener) => {
+    const handler = (_event: IpcRendererEvent, command: MenuCommand): void => listener(command);
+    ipcRenderer.on('menu:command', handler);
+    ipcRenderer.send('menu:ready');
+    return () => {
+      ipcRenderer.removeListener('menu:command', handler);
+    };
+  }
 };
 
 contextBridge.exposeInMainWorld('metalExplorer', api);

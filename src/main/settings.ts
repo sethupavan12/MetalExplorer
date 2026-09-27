@@ -10,6 +10,9 @@ interface StoredSettings {
   refreshMs: number;
   rememberApiKey: boolean;
   theme: ThemeName;
+  agentUsage: boolean;
+  agentNotifications: boolean;
+  menuBarMonitor: boolean;
   encryptedApiKey?: string;
 }
 
@@ -18,10 +21,22 @@ const DEFAULT_SETTINGS: StoredSettings = {
   model: 'gpt-4.1-mini',
   refreshMs: 3000,
   rememberApiKey: false,
-  theme: 'light'
+  theme: 'system',
+  agentUsage: false,
+  agentNotifications: false,
+  menuBarMonitor: false
 };
 
 let memoryApiKey = '';
+let cachedSettings: StoredSettings | null = null;
+// safeStorage can block the main thread on a Keychain prompt (for example after the app's
+// signature changes), so it is only touched when a remembered key is saved or used.
+let encryptionAvailable: boolean | null = null;
+
+function isEncryptionAvailable(): boolean {
+  encryptionAvailable ??= safeStorage.isEncryptionAvailable();
+  return encryptionAvailable;
+}
 
 export function getSettings(): AppSettings {
   const stored = readStoredSettings();
@@ -32,26 +47,34 @@ export function getSettings(): AppSettings {
     refreshMs: stored.refreshMs,
     rememberApiKey: stored.rememberApiKey,
     theme: stored.theme,
+    agentUsage: stored.agentUsage,
+    agentNotifications: stored.agentNotifications,
+    menuBarMonitor: stored.menuBarMonitor,
     hasApiKey: Boolean(memoryApiKey || stored.encryptedApiKey),
-    encryptionAvailable: safeStorage.isEncryptionAvailable()
+    encryptionAvailable
   };
 }
 
 export function getAiSettings(): AppSettings & { apiKey?: string } {
   const settings = getSettings();
   const stored = readStoredSettings();
-  const apiKey = memoryApiKey || decryptApiKey(stored.encryptedApiKey);
-  return { ...settings, apiKey };
+  if (!memoryApiKey && stored.encryptedApiKey) {
+    memoryApiKey = decryptApiKey(stored.encryptedApiKey) ?? '';
+  }
+  return { ...settings, apiKey: memoryApiKey || undefined };
 }
 
 export function updateSettings(update: SettingsUpdate): AppSettings {
   const previous = readStoredSettings();
   const next: StoredSettings = {
-    baseUrl: normalizeBaseUrl(update.baseUrl ?? previous.baseUrl),
-    model: sanitizeString(update.model ?? previous.model, DEFAULT_SETTINGS.model),
-    refreshMs: clampRefresh(update.refreshMs ?? previous.refreshMs),
-    rememberApiKey: update.rememberApiKey ?? previous.rememberApiKey,
+    baseUrl: normalizeBaseUrl(typeof update.baseUrl === 'string' ? update.baseUrl : previous.baseUrl),
+    model: sanitizeString(typeof update.model === 'string' ? update.model : previous.model, DEFAULT_SETTINGS.model),
+    refreshMs: clampRefresh(typeof update.refreshMs === 'number' ? update.refreshMs : previous.refreshMs),
+    rememberApiKey: typeof update.rememberApiKey === 'boolean' ? update.rememberApiKey : previous.rememberApiKey,
     theme: normalizeTheme(update.theme ?? previous.theme),
+    agentUsage: typeof update.agentUsage === 'boolean' ? update.agentUsage : previous.agentUsage,
+    agentNotifications: typeof update.agentNotifications === 'boolean' ? update.agentNotifications : previous.agentNotifications,
+    menuBarMonitor: typeof update.menuBarMonitor === 'boolean' ? update.menuBarMonitor : previous.menuBarMonitor,
     encryptedApiKey: previous.encryptedApiKey
   };
 
@@ -60,11 +83,14 @@ export function updateSettings(update: SettingsUpdate): AppSettings {
     next.encryptedApiKey = undefined;
   }
 
-  if (typeof update.apiKey === 'string' && update.apiKey.trim()) {
-    memoryApiKey = update.apiKey.trim();
+  const keyChanged = typeof update.apiKey === 'string' && Boolean(update.apiKey.trim());
+  if (keyChanged) {
+    memoryApiKey = (update.apiKey as string).trim();
   }
 
-  if (next.rememberApiKey && memoryApiKey) {
+  // Encrypt only when the key or the remember choice changes, not on every settings write.
+  const rememberTurnedOn = next.rememberApiKey && !previous.rememberApiKey;
+  if (next.rememberApiKey && memoryApiKey && (keyChanged || rememberTurnedOn)) {
     next.encryptedApiKey = encryptApiKey(memoryApiKey);
   }
 
@@ -77,6 +103,11 @@ export function updateSettings(update: SettingsUpdate): AppSettings {
 }
 
 function readStoredSettings(): StoredSettings {
+  cachedSettings ??= readStoredSettingsFromDisk();
+  return { ...cachedSettings };
+}
+
+function readStoredSettingsFromDisk(): StoredSettings {
   const path = settingsPath();
 
   if (!existsSync(path)) {
@@ -91,6 +122,9 @@ function readStoredSettings(): StoredSettings {
       refreshMs: clampRefresh(parsed.refreshMs ?? DEFAULT_SETTINGS.refreshMs),
       rememberApiKey: Boolean(parsed.rememberApiKey),
       theme: normalizeTheme(parsed.theme),
+      agentUsage: parsed.agentUsage === true,
+      agentNotifications: parsed.agentNotifications === true,
+      menuBarMonitor: parsed.menuBarMonitor === true,
       encryptedApiKey: typeof parsed.encryptedApiKey === 'string' ? parsed.encryptedApiKey : undefined
     };
   } catch {
@@ -102,6 +136,7 @@ function writeStoredSettings(settings: StoredSettings): void {
   const path = settingsPath();
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(settings, null, 2), { mode: 0o600 });
+  cachedSettings = { ...settings };
 
   try {
     chmodSync(path, 0o600);
@@ -115,7 +150,7 @@ function settingsPath(): string {
 }
 
 function encryptApiKey(apiKey: string): string | undefined {
-  if (!safeStorage.isEncryptionAvailable()) {
+  if (!isEncryptionAvailable()) {
     return undefined;
   }
 
@@ -123,7 +158,7 @@ function encryptApiKey(apiKey: string): string | undefined {
 }
 
 function decryptApiKey(encryptedApiKey?: string): string | undefined {
-  if (!encryptedApiKey || !safeStorage.isEncryptionAvailable()) {
+  if (!encryptedApiKey || !isEncryptionAvailable()) {
     return undefined;
   }
 
@@ -159,5 +194,5 @@ function clampRefresh(value: number): number {
 }
 
 function normalizeTheme(value: unknown): ThemeName {
-  return value === 'light' || value === 'dark' || value === 'matrix' ? value : DEFAULT_SETTINGS.theme;
+  return value === 'system' || value === 'light' || value === 'dark' || value === 'matrix' ? value : DEFAULT_SETTINGS.theme;
 }

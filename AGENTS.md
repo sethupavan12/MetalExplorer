@@ -16,11 +16,14 @@ When using AI coding agents in this repo:
 Important files:
 
 ```text
-src/main/processes.ts        process parsing, network parsing, termination
+src/main/sampler.ts          sampling, history, guarded termination
+src/main/processes.ts        process parsing, network parsing, classification
+src/main/agents.ts           coding agent sessions and process trees
+src/main/agent-usage.ts      opt-in local token usage reader
 src/main/ai.ts               AI explanation payload and parser
 src/main/settings.ts         local settings and API key storage
 src/preload/index.ts         renderer API boundary
-src/renderer/App.tsx         UI behavior
+src/renderer/App.tsx         app shell; views in src/renderer/views
 src/renderer/styles.css      layout and themes
 docs/SAFETY_AND_PRIVACY.md   user trust contract
 ARCHITECTURE.md              trust boundaries and data flow
