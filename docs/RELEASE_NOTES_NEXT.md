@@ -1,4 +1,6 @@
-# MetalExplorer Next Release Notes
+# MetalExplorer v0.4.0 Release Notes
+
+Release date: 2026-09-27
 
 ## Highlights
 
